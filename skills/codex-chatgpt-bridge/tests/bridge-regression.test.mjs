@@ -1,0 +1,324 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+
+import {
+  estimateTokens,
+  receiptCompletionErrors,
+  validatePacket,
+  verifyReceiptArtifacts,
+} from '../scripts/validate-handoff.mjs';
+import { inspectInstallation } from '../scripts/skill-doctor.mjs';
+import {
+  consentStatus,
+  defaultConsentPath,
+  DISCLOSURE_VERSION,
+  RISK_ACKNOWLEDGEMENT,
+  writeConsentDecision,
+} from '../scripts/automation-consent.mjs';
+
+const skillRoot = fileURLToPath(new URL('../', import.meta.url));
+const doctorPath = join(skillRoot, 'scripts', 'skill-doctor.mjs');
+const consentPath = join(skillRoot, 'scripts', 'automation-consent.mjs');
+const validatorPath = join(skillRoot, 'scripts', 'validate-handoff.mjs');
+
+test('default consent storage is scoped to the unified skill directory', () => {
+  const path = defaultConsentPath({ CODEX_HOME: 'C:\\codex-home' });
+  assert.ok(path.endsWith(join('codex-chatgpt-bridge', 'automation-consent.json')));
+  assert.ok(!path.includes('codex-bridge-chatgpt'));
+});
+
+const packetText = `BEGIN_CONTEXT_PACKET
+packet_id: regression-001
+requested_reasoner: GPT-6
+requested_effort: High
+operating_mode: NORMAL
+route: ROUTE_CHATGPT_REASONING
+permission_level: L0_NO_TOOL
+tools_available: none
+
+## Objective
+Validate the bridge contract.
+
+## Acceptance
+The receipt must be bound to the submitted artifacts.
+
+## Repository State
+Temporary fixture only.
+
+## Evidence
+This is synthetic test data.
+
+## Constraints
+No external actions.
+
+## Access Boundary
+No tools.
+
+## Tool Budget
+None.
+
+## Questions
+Does the contract pass?
+END_CONTEXT_PACKET
+`;
+
+const resultText = `BEGIN_REASONING_RESULT
+
+packet_id: regression-001
+
+## Verdict
+The synthetic fixture is internally consistent.
+
+## Assumptions
+Only this test fixture is in scope.
+
+## Evidence Used
+The generated packet and receipt.
+
+## Proposed Changes
+None.
+
+## Tests
+The local regression test is running.
+
+## Risks
+No external state is touched.
+
+## Unknowns
+None for this fixture.
+END_REASONING_RESULT
+`;
+
+test('packet contract requires a visible model and reasoning effort request', () => {
+  assert.deepEqual(validatePacket(packetText), []);
+  const missingEffort = packetText.replace('requested_effort: High\n', '');
+  assert.ok(validatePacket(missingEffort).some((error) => error.includes('requested_effort')));
+});
+
+function digest(text) {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+async function tempDirectory(t) {
+  const path = await mkdtemp(join(tmpdir(), 'codex-bridge-regression-'));
+  t.after(() => rm(path, { recursive: true, force: true }));
+  return path;
+}
+
+async function makeRun(root) {
+  await mkdir(root, { recursive: true });
+  const browserEvidence = 'Synthetic visible-state evidence for test purposes.\n';
+  await writeFile(join(root, 'packet.md'), packetText, 'utf8');
+  await writeFile(join(root, 'result.md'), resultText, 'utf8');
+  await writeFile(join(root, 'browser-evidence.md'), browserEvidence, 'utf8');
+  const receipt = {
+    schema_version: 2,
+    packet_id: 'regression-001',
+    artifacts: {
+      packet: { path: 'packet.md', sha256: digest(packetText), approximate_tokens: estimateTokens(packetText) },
+      result: { path: 'result.md', sha256: digest(resultText) },
+      browser_evidence: { path: 'browser-evidence.md', sha256: digest(browserEvidence) },
+    },
+    codex_model: { requested: 'test model', observed: 'test model', status: 'verified', evidence: 'synthetic test' },
+    chatgpt_model: {
+      requested: 'GPT-6', requested_effort: 'High', observed: 'GPT-6 / High', status: 'verified',
+      evidence: 'synthetic test', preflight_visible: true, postflight_visible: true,
+    },
+    privacy_review: {
+      scope_minimized: true, credentials_scan_passed: true, semantic_privacy_reviewed: true,
+      raw_diff_excluded: true, unrelated_files_excluded: true,
+    },
+    browser_transport: 'verified',
+    packet_validation: 'passed',
+    result_validation: 'passed',
+    pair_validation: 'passed',
+    local_revalidation: 'passed',
+    adoption: { status: 'passed', accepted: [], rejected: [], deferred: [], local_evidence: [] },
+    local_changes: { status: 'no_changes_needed', reason: 'Synthetic test fixture.' },
+    tests: 'passed',
+  };
+  return receipt;
+}
+
+test('complete receipt accepts matching, semantically valid artifacts', async (t) => {
+  const root = join(await tempDirectory(t), 'run');
+  const receipt = await makeRun(root);
+  assert.deepEqual(receiptCompletionErrors(receipt), []);
+  assert.deepEqual(await verifyReceiptArtifacts(receipt, root), []);
+});
+
+test('complete CLI resolves an explicit artifact root independently of its working directory', async (t) => {
+  const root = join(await tempDirectory(t), 'run');
+  const receipt = await makeRun(root);
+  const receiptPath = join(root, 'receipt.json');
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+
+  const explicitRoot = spawnSync(process.execPath, [
+    validatorPath, 'complete', receiptPath, '--artifact-root', root,
+  ], { cwd: tmpdir(), encoding: 'utf8' });
+  assert.equal(explicitRoot.status, 0, explicitRoot.stderr);
+  assert.match(explicitRoot.stdout, /OK: valid complete/);
+
+  const cwdDefault = spawnSync(process.execPath, [validatorPath, 'complete', receiptPath], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.equal(cwdDefault.status, 0, cwdDefault.stderr);
+});
+
+test('complete receipt rejects semantically invalid result even with a matching new hash', async (t) => {
+  const root = join(await tempDirectory(t), 'run');
+  const receipt = await makeRun(root);
+  const invalidResult = resultText.replace('## Verdict', '## Outcome');
+  await writeFile(join(root, 'result.md'), invalidResult, 'utf8');
+  receipt.artifacts.result.sha256 = digest(invalidResult);
+
+  const errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('result: missing required section: ## Verdict')));
+});
+
+test('complete receipt rejects Packet ID and token-count mismatches', async (t) => {
+  const root = join(await tempDirectory(t), 'run');
+  const receipt = await makeRun(root);
+  const changedPacket = packetText.replace('regression-001', 'regression-002');
+  await writeFile(join(root, 'packet.md'), changedPacket, 'utf8');
+  receipt.artifacts.packet.sha256 = digest(changedPacket);
+
+  let errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('packet_id mismatch')));
+  assert.ok(errors.some((error) => error.includes('receipt packet_id mismatch')));
+
+  await writeFile(join(root, 'packet.md'), packetText, 'utf8');
+  receipt.artifacts.packet.sha256 = digest(packetText);
+  receipt.artifacts.packet.approximate_tokens += 1;
+  errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('packet approximate_tokens mismatch')));
+});
+
+test('complete receipt rejects a hash mismatch on otherwise valid browser evidence', async (t) => {
+  const root = join(await tempDirectory(t), 'run');
+  const receipt = await makeRun(root);
+  await writeFile(join(root, 'browser-evidence.md'), 'changed evidence\n', 'utf8');
+  const errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('browser_evidence sha256 mismatch')));
+});
+
+test('complete receipt rejects traversal, absolute outside paths, missing paths, and directories', async (t) => {
+  const base = await tempDirectory(t);
+  const root = join(base, 'run');
+  const receipt = await makeRun(root);
+  const outside = join(base, 'outside.md');
+  await writeFile(outside, 'outside artifact\n', 'utf8');
+
+  receipt.artifacts.browser_evidence.path = '../outside.md';
+  receipt.artifacts.browser_evidence.sha256 = digest('outside artifact\n');
+  let errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('resolves outside the artifact root')));
+
+  receipt.artifacts.browser_evidence.path = outside;
+  errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('resolves outside the artifact root')));
+
+  receipt.artifacts.browser_evidence.path = '';
+  errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('artifact path is missing or invalid')));
+
+  await mkdir(join(root, 'directory-target'));
+  receipt.artifacts.browser_evidence.path = 'directory-target';
+  errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('not a regular file')));
+});
+
+test('complete receipt rejects a symlink that resolves outside its artifact root', async (t) => {
+  const base = await tempDirectory(t);
+  const root = join(base, 'run');
+  const receipt = await makeRun(root);
+  const outside = join(base, 'outside.md');
+  const link = join(root, 'evidence-link.md');
+  await writeFile(outside, 'outside artifact\n', 'utf8');
+  try {
+    await symlink(outside, link, 'file');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'UNKNOWN'].includes(error.code)) {
+      t.skip(`symlink creation unavailable on this host: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+  receipt.artifacts.browser_evidence.path = 'evidence-link.md';
+  receipt.artifacts.browser_evidence.sha256 = digest('outside artifact\n');
+  const errors = await verifyReceiptArtifacts(receipt, root);
+  assert.ok(errors.some((error) => error.includes('resolves outside the artifact root')));
+});
+
+test('Doctor reports identical copies READY and names controlled-file drift', async (t) => {
+  const copyRoot = join(await tempDirectory(t), 'skill-copy');
+  await cp(skillRoot, copyRoot, { recursive: true });
+  let report = await inspectInstallation(skillRoot, copyRoot);
+  assert.equal(report.status, 'READY');
+  assert.equal(report.comparison.differences.length, 0);
+
+  const doctorGuide = join(copyRoot, 'references', 'skill-doctor.md');
+  await writeFile(doctorGuide, `${await readFile(doctorGuide, 'utf8')}\nDrift fixture.\n`, 'utf8');
+  report = await inspectInstallation(skillRoot, copyRoot);
+  const consistencyCheck = report.checks.find((check) => check.id === 'skill_copy_consistency');
+  assert.equal(report.status, 'INVALID_INSTALLATION');
+  assert.ok(consistencyCheck.differences.some((difference) => difference.path === 'references/skill-doctor.md'));
+});
+
+test('Doctor rejects required paths that are directories and invalid option values', async (t) => {
+  const copyRoot = join(await tempDirectory(t), 'skill-copy');
+  await cp(skillRoot, copyRoot, { recursive: true });
+  await rm(join(copyRoot, 'SKILL.md'));
+  await mkdir(join(copyRoot, 'SKILL.md'));
+  const report = await inspectInstallation(copyRoot);
+  assert.equal(report.status, 'INVALID_INSTALLATION');
+  assert.equal(report.checks.find((check) => check.id === 'skill')?.reason, 'not a regular file');
+
+  const missingOptionValue = spawnSync(process.execPath, [doctorPath, '--compare-root', '--json'], { encoding: 'utf8' });
+  assert.equal(missingOptionValue.status, 2);
+  assert.match(missingOptionValue.stderr, /missing value for --compare-root/);
+
+  const duplicateOption = spawnSync(process.execPath, [doctorPath, '--json', '--json'], { encoding: 'utf8' });
+  assert.equal(duplicateOption.status, 2);
+  assert.match(duplicateOption.stderr, /duplicate argument: --json/);
+});
+
+test('consent remains isolated to the test state file and requires the exact acknowledgement', async (t) => {
+  const stateRoot = await mkdtemp(join(skillRoot, 'tests', '.consent-state-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const stateFile = join(stateRoot, 'automation-consent.json');
+  assert.equal((await consentStatus(stateFile)).status, 'NEEDS_AUTOMATION_CONSENT');
+
+  const rejected = spawnSync(process.execPath, [
+    consentPath, 'enable', '--state-file', stateFile, '--acknowledge-risk', 'wrong', '--json',
+  ], { encoding: 'utf8' });
+  assert.equal(rejected.status, 2);
+  assert.equal(JSON.parse(rejected.stdout).status, 'ACKNOWLEDGEMENT_REQUIRED');
+  assert.equal((await consentStatus(stateFile)).status, 'NEEDS_AUTOMATION_CONSENT');
+
+  const enabled = spawnSync(process.execPath, [
+    consentPath, 'enable', '--state-file', stateFile, '--acknowledge-risk', RISK_ACKNOWLEDGEMENT, '--json',
+  ], { encoding: 'utf8' });
+  assert.equal(enabled.status, 0);
+  assert.equal(JSON.parse(enabled.stdout).status, 'READY');
+  assert.equal((await consentStatus(stateFile)).browser_automation_enabled, true);
+
+  const disabled = await writeConsentDecision(stateFile, false);
+  assert.equal(disabled.status, 'AUTOMATION_DISABLED');
+  assert.equal(disabled.browser_automation_enabled, false);
+
+  await writeFile(stateFile, JSON.stringify({
+    schema_version: 1,
+    disclosure_version: DISCLOSURE_VERSION - 1,
+    browser_automation_enabled: true,
+    decided_at: new Date().toISOString(),
+  }), 'utf8');
+  assert.equal((await consentStatus(stateFile)).status, 'NEEDS_AUTOMATION_CONSENT');
+});

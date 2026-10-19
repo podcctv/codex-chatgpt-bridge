@@ -6,6 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/). Versions stay i
 `0.x` range while the trust boundary is still policy-based rather than sandbox-enforced —
 see the Security Model section in [README.md](README.md).
 
+## [Unreleased]
+
+### Added
+
+- Unified the existing `codex-chatgpt-bridge` entrypoint with a consented, one-turn in-app Browser handoff for `L0_NO_TOOL` reasoning, including visible model checks, packet/result validation, and a redacted local completion receipt.
+- Added automation-consent state, a static Skill Doctor, and focused regression tests for the browser handoff contracts.
+- Documented the separate authorization boundaries for direct browser handoffs and OAuth-gated DevSpace access.
+
 ## [0.3.0] - 2026-07-23
 
 Hardening release for reboot recovery, credential storage, and multi-root access.

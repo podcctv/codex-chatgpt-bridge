@@ -39,12 +39,12 @@
 
 MCP 桥本身是上游开源项目 [DevSpace](https://github.com/Waishnav/devspace)，通过 npm 安装，包名为 `@waishnav/devspace`，由它提供 MCP server、OAuth、文件工具和 `run_shell`。本仓库不 fork、不打补丁，也不在它外面再套一层 server。
 
-把 DevSpace 真正部署在「coding agent ↔ ChatGPT」之间以后，还缺两样东西，本仓库补上的正是它们：**一份告诉 agent 该怎么用它的 skill**，以及**跑在桥进程之外的控制脚本**。
+本仓库提供 Codex 与 ChatGPT 协作所需的完整指引和控制：**一个统一 skill 入口**、**运行在桥进程之外的控制脚本**，以及适用于无需本地访问任务的可选、单轮浏览器交接。
 
 | 层 | 归属 | 负责什么 |
 |---|---|---|
 | MCP 桥 | DevSpace（上游） | MCP server、OAuth、文件工具、`run_shell` |
-| Skill | 本仓库 — `SKILL.md` | 哪些任务应交给 ChatGPT、`L0`–`L5` 权限等级、任务包与 manifest 格式、人工审批环节 |
+| Skill | 本仓库 — `SKILL.md` | `L0_NO_TOOL` 浏览器任务包、`L1`–`L5` DevSpace 桥接路由、任务包与 manifest、Consent、收据和审批环节 |
 | 控制层 | 本仓库 — `scripts/bridge_controller.ps1` | 把 `On` / `Off` / `Reboot` 做成一个带互斥锁、带健康校验的期望状态事务 |
 | 外部恢复 | 本仓库 — `scripts/restart_task.ps1` | 按需的 Windows 计划任务，agent 已经够不到桥时也能把它重启起来 |
 | 链路稳定 | 本仓库 — `scripts/set_cf_api_config.ps1` | 刷新稳定 Worker 的 upstream，让对外的 MCP URL 始终不变 |
@@ -52,6 +52,17 @@ MCP 桥本身是上游开源项目 [DevSpace](https://github.com/Waishnav/devspa
 上表中的仓库路径都相对于 [skills/codex-chatgpt-bridge/](skills/codex-chatgpt-bridge)，也就是 `install.ps1` 复制到 `%USERPROFILE%\.codex\skills\codex-chatgpt-bridge` 的那一份。
 
 控制层刻意放在桥之外。桥停了之后无法自行重启；刚关闭自身通道的 agent 更是失去了控制链路。所以生命周期交给 agent 调用的脚本，再加一个「agent 也无法调用时由 Windows 触发」的计划任务。
+
+## 两种交接路径
+
+当一个边界清楚的问题可由精简且经过隐私审查的任务包回答时，使用直接浏览器路径。它只通过应用内 Browser 进行单轮交接，需要本轮对实验性自动化的明确同意，且不给 ChatGPT 工具或仓库访问权。默认先在可见界面选择思考强度 **High**，再选择 **GPT-6**；任何选择或浏览器检查无法确认时都应停止。
+
+只有需要读取本地文件或执行明确限定的诊断时，才使用 DevSpace。其 OAuth 授权、窄范围 `allowedRoots`、`L1`–`L5` 权限策略和服务控制流程均独立于浏览器 Consent。两种路径的授权互不继承。Codex 负责验证导入的建议、本地改动、测试、git 和最终结论。
+
+| 路径 | 适用场景 | 访问边界 |
+|---|---|---|
+| 应用内 Browser 直连 | 基于精简任务包的一次推理 | `L0_NO_TOOL`，无工具、无仓库访问 |
+| DevSpace 本地桥 | 大上下文本地阅读或受限诊断 | OAuth 授权和明确的 `L1`–`L5` 策略 |
 
 这个项目的目标很简单：
 
@@ -78,9 +89,9 @@ Codex 判断任务类型和模式
   ↓
 需要大上下文/深度推理时，把紧凑任务包发给 ChatGPT
   ↓
-ChatGPT 通过本地 MCP 桥读取受限项目目录
+Codex 选择一条路径：L0 浏览器任务包，或受限 DevSpace 访问
   ↓
-ChatGPT 返回 Action Manifest
+ChatGPT 返回经过校验的推理合同或 Action Manifest
   ↓
 Codex 本地执行改动、测试和验证
   ↓

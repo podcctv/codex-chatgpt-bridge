@@ -17,7 +17,7 @@ Default posture:
 - local bridge defaults to read-only and narrow workspace access.
 - ChatGPT recommendations are advice until Codex verifies them locally.
 
-For service start/stop/status, OAuth setup, Cloudflare tunnels, and ChatGPT UI configuration, use the `codex-chatgpt-bridge` skill. This skill decides **when and how** to route work.
+For service start/stop/status, OAuth setup, Cloudflare tunnels, browser handoff, and ChatGPT UI configuration, use the `codex-chatgpt-bridge` skill. This policy decides **when and how** to route work.
 
 ## Operating Modes
 
@@ -110,6 +110,17 @@ In `TOKEN_SAVING`, prefer ChatGPT for all safe non-mutating reading/reasoning/re
 
 In `CHATGPT_ARCHITECT`, default to `ROUTE_CHATGPT_PLAN` for spec/design/decomposition/prompt-authoring and `ROUTE_CHATGPT_REASONING` for per-task review, while every code change runs as a single-task `ROUTE_CODEX_EXECUTE`. Codex plans nothing beyond a feasibility check; it executes and verifies.
 
+## Handoff Transport
+
+Select one transport for a handoff and keep its access boundary for the entire turn:
+
+| Transport | Use when | Boundary | Required controls |
+|---|---|---|---|
+| Direct browser | One bounded reasoning or planning question can be answered from a compact packet | `L0_NO_TOOL`; no repository access, browsing, or tools | Current explicit automation consent, visible account/model preflight, one submit and one verified response copy, packet/result validation, local receipt |
+| DevSpace local bridge | ChatGPT must inspect files or run an explicitly scoped diagnostic | OAuth-authorized app plus narrow `allowedRoots`; policy level `L1`–`L5` | Bridge Doctor, lowest sufficient permission, approved root, controller lifecycle, local review of every recommendation |
+
+The browser route is experimental and uses the in-app Browser only. Follow the consent, supported-surface, High-then-GPT-6 default, one-submit/one-copy, blocker, and receipt procedures in the main skill references. Browser consent authorizes only that experimental automation; it grants no DevSpace access. DevSpace OAuth and permission approval grant no browser consent. Do not switch transports mid-handoff; start a new packet and re-evaluate access if the task needs a different route.
+
 ## Permission Levels
 
 Always choose the lowest sufficient level and include it in the ChatGPT Task Packet.
@@ -157,7 +168,7 @@ Consequences:
 7. If any requested action crosses L3-L5 boundaries, route to `ROUTE_HUMAN_APPROVAL`.
 8. After ChatGPT responds, Codex reads only implementation-relevant files, applies accepted changes, verifies, and reports evidence.
 
-Use the existing Chrome skill for transport when sending packets or retrieving replies. Use local bridge only after confirming the workspace root is narrow and appropriate.
+For direct browser handoffs, follow the in-app Browser workflow in the main skill and its transport reference. Use the DevSpace local bridge only after confirming the workspace root is narrow and appropriate; do not use it for an `L0_NO_TOOL` packet.
 
 ## ChatGPT Task Packet
 

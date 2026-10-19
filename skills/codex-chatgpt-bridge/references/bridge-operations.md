@@ -127,7 +127,7 @@ Rules:
    - `/.well-known/oauth-protected-resource/mcp` should return `200`.
    - `/mcp` should return `401` before authorization.
 8. Optionally register the on-demand Reboot task after explicit user approval. Do not add an automatic trigger by default.
-9. Use the Chrome skill to open ChatGPT settings:
+9. Open ChatGPT settings in the in-app Browser or guide the user to open them directly:
    - `Settings -> Apps -> Advanced settings`: ensure Developer mode is on.
    - `Apps -> Manage -> Create app`: create or update the app.
    - Name: concise project-agnostic name unless the user asks otherwise.

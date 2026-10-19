@@ -38,12 +38,12 @@
 
 The MCP bridge itself is [DevSpace](https://github.com/Waishnav/devspace) — an upstream open-source project you install from npm as `@waishnav/devspace`. It owns the MCP server, OAuth, the file tools, and `run_shell`. This repository does not fork it, patch it, or wrap it in a second server.
 
-This repository adds the two things missing when you put DevSpace between a coding agent and ChatGPT: **a skill that tells the agent how to use it**, and **control scripts that live outside the bridge process**.
+This repository adds the guidance and controls needed to coordinate Codex with ChatGPT: **one skill entrypoint**, **control scripts that live outside the bridge process**, and an optional, consented one-turn browser handoff for tasks that need no local access.
 
 | Layer | Owner | Responsibility |
 |---|---|---|
 | MCP bridge | DevSpace (upstream) | MCP server, OAuth, file tools, `run_shell` |
-| Skill | this repo — `SKILL.md` | when to hand a task to ChatGPT, permission levels `L0`–`L5`, task-packet and manifest formats, approval gates |
+| Skill | this repo — `SKILL.md` | direct browser packets at `L0_NO_TOOL`, DevSpace bridge routing at `L1`–`L5`, task-packet and manifest formats, consent, receipts, and approval gates |
 | Control layer | this repo — `scripts/bridge_controller.ps1` | desired-state `On` / `Off` / `Reboot`, each a mutex-protected, health-verified transaction |
 | External recovery | this repo — `scripts/restart_task.ps1` | an on-demand Windows scheduled task that can reboot a bridge the agent can no longer reach |
 | Link stability | this repo — `scripts/set_cf_api_config.ps1` | refreshes the stable Worker upstream so the public MCP URL never moves |
@@ -51,6 +51,17 @@ This repository adds the two things missing when you put DevSpace between a codi
 Repo paths above are relative to [skills/codex-chatgpt-bridge/](skills/codex-chatgpt-bridge), which is what `install.ps1` copies to `%USERPROFILE%\.codex\skills\codex-chatgpt-bridge`.
 
 The control layer is deliberately external. A bridge cannot restart itself once it is down, and an agent that has just stopped its own transport has no way back in — so the lifecycle lives in scripts the agent invokes, plus a scheduled task that Windows invokes when the agent cannot.
+
+## Two Handoff Paths
+
+Use the direct browser path when a single, bounded reasoning request can be answered from a privacy-reviewed packet. It uses the in-app Browser, requires current explicit consent to experimental automation, and grants ChatGPT no tools or repository access. The default visible selection is reasoning effort **High**, then **GPT-6**; the handoff stops if either selection or a required browser check cannot be verified.
+
+Use DevSpace when ChatGPT needs scoped local file or diagnostic access. Its OAuth authorization, narrow `allowedRoots`, `L1`–`L5` policy, and controller lifecycle are independent from browser consent. Neither path inherits authorization from the other. Codex validates imported advice and owns local edits, tests, git, and final claims.
+
+| Path | Best for | Access |
+|---|---|---|
+| Direct in-app Browser | One-shot reasoning from a compact packet | `L0_NO_TOOL`, no tools or repository access |
+| DevSpace local bridge | Large-context local reading or scoped diagnostics | OAuth-gated app and explicit `L1`–`L5` policy |
 
 ## Why
 

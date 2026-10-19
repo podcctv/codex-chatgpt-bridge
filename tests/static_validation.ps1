@@ -77,6 +77,35 @@ try {
     }
   }
 
+  $nodeCommand = Get-Command "node.exe" -ErrorAction SilentlyContinue
+  if (-not $nodeCommand) { throw "Node.js 18 or newer is required to validate browser handoff scripts." }
+  $nodePath = $nodeCommand.Source
+  $nodeVersionOutput = & $nodePath --version 2>&1
+  if ($LASTEXITCODE -ne 0 -or ($nodeVersionOutput -notmatch '^v(\d+)')) {
+    throw "Could not determine the Node.js version: $($nodeVersionOutput -join ' ')"
+  }
+  if ([int]$Matches[1] -lt 18) { throw "Node.js 18 or newer is required; found $nodeVersionOutput." }
+
+  $nodeScripts = @(
+    (Join-Path $skillRoot "scripts\validate-handoff.mjs"),
+    (Join-Path $skillRoot "scripts\automation-consent.mjs"),
+    (Join-Path $skillRoot "scripts\skill-doctor.mjs"),
+    (Join-Path $skillRoot "tests\bridge-regression.test.mjs")
+  )
+  foreach ($nodeScript in $nodeScripts) {
+    if (-not (Test-Path -LiteralPath $nodeScript)) { throw "Expected Node.js script is missing: $nodeScript" }
+    $checkOutput = & $nodePath --check $nodeScript 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw "Node.js syntax check failed for ${nodeScript}:`n$($checkOutput -join [Environment]::NewLine)"
+    }
+  }
+  $regressionTest = Join-Path $skillRoot "tests\bridge-regression.test.mjs"
+  $testOutput = & $nodePath --test $regressionTest 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "Browser handoff regression tests failed:`n$($testOutput -join [Environment]::NewLine)"
+  }
+  Write-Output ($testOutput -join [Environment]::NewLine)
+
   $bridgeSource = [System.IO.File]::ReadAllText($bridgeScript)
   if ($bridgeSource -notmatch '--no-prechecks') {
     throw "cloudflared startup does not bypass the redundant built-in prechecks."
@@ -206,6 +235,22 @@ while (`$true) { Start-Sleep -Seconds 1 }
   $installedSkill = Join-Path $testCodexHome "skills\codex-chatgpt-bridge"
   if (-not (Test-Path -LiteralPath (Join-Path $installedSkill "SKILL.md"))) {
     throw "Installer did not copy the skill into the test Codex home."
+  }
+  $installedDoctor = Join-Path $installedSkill "scripts\skill-doctor.mjs"
+  if (-not (Test-Path -LiteralPath $installedDoctor)) { throw "Installer omitted the static Skill Doctor." }
+  $installedDoctorOutput = & $nodePath $installedDoctor --json 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "Installed Skill Doctor failed:`n$($installedDoctorOutput -join [Environment]::NewLine)"
+  }
+  $installedDoctorReport = ($installedDoctorOutput -join [Environment]::NewLine) | ConvertFrom-Json
+  if ($installedDoctorReport.status -ne "READY") { throw "Installed Skill Doctor did not report READY." }
+  $compareDoctorOutput = & $nodePath $installedDoctor --compare-root $skillRoot --json 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "Installed Skill Doctor could not compare against the source package:`n$($compareDoctorOutput -join [Environment]::NewLine)"
+  }
+  $compareDoctorReport = ($compareDoctorOutput -join [Environment]::NewLine) | ConvertFrom-Json
+  if ($compareDoctorReport.status -ne "READY" -or $compareDoctorReport.comparison.differences.Count -ne 0) {
+    throw "Installed skill does not match the repository's controlled files."
   }
   $markerPath = Join-Path $installedSkill "test-existing-install-marker.txt"
   [System.IO.File]::WriteAllText($markerPath, "preserve-me", (New-Object System.Text.UTF8Encoding $false))
