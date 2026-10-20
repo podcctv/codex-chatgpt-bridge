@@ -49,6 +49,8 @@ const SECRET_PATTERNS = [
 ];
 
 const MODEL_STATUSES = new Set(['verified', 'unverified']);
+const SUPPORTED_RECEIPT_SCHEMAS = new Set([2, 3]);
+const CURRENT_RECEIPT_SCHEMA = 3;
 const CHECK_STATUSES = new Set(['passed', 'failed', 'not_run']);
 const LOCAL_CHANGE_STATUSES = new Set(['applied', 'no_changes_needed', 'failed', 'not_run']);
 const PRIVACY_FIELDS = [
@@ -179,19 +181,53 @@ function validateModelRecord(receipt, field, errors) {
   if (!MODEL_STATUSES.has(model.status)) {
     errors.push(`${field}.status must be verified or unverified`);
   }
-  if (typeof model.evidence !== 'string' || !model.evidence.trim()) {
-    errors.push(`${field}.evidence must be a non-empty local evidence note`);
-  }
-  if (model.status === 'verified' && (typeof model.observed !== 'string' || !model.observed.trim())) {
-    errors.push(`${field}.observed is required when status is verified`);
-  }
-  if (field === 'chatgpt_model') {
+  if (field === 'chatgpt_model' && receipt.schema_version === CURRENT_RECEIPT_SCHEMA) {
     if (typeof model.requested_effort !== 'string' || !model.requested_effort.trim()) {
       errors.push(`${field}.requested_effort must be a non-empty string`);
     }
-    for (const evidenceField of ['preflight_visible', 'postflight_visible']) {
+    for (const key of ['evidence_model', 'evidence_effort']) {
+      if (typeof model[key] !== 'string' || !model[key].trim()) {
+        errors.push(`${field}.${key} must be a non-empty local evidence note`);
+      }
+    }
+    if (model.status === 'verified') {
+      for (const key of ['observed_model', 'observed_effort']) {
+        if (typeof model[key] !== 'string' || !model[key].trim()) {
+          errors.push(`${field}.${key} is required when status is verified`);
+        }
+      }
+      if (typeof model.requested === 'string' && typeof model.observed_model === 'string'
+          && model.observed_model.trim().toLocaleLowerCase() !== model.requested.trim().toLocaleLowerCase()) {
+        errors.push(`${field}.observed_model must match the requested model exactly`);
+      }
+      if (typeof model.requested_effort === 'string' && typeof model.observed_effort === 'string'
+          && model.observed_effort.trim().toLocaleLowerCase() !== model.requested_effort.trim().toLocaleLowerCase()) {
+        errors.push(`${field}.observed_effort must match the requested effort exactly`);
+      }
+    }
+    for (const evidenceField of [
+      'preflight_model_visible', 'preflight_effort_visible',
+      'postflight_model_visible', 'postflight_effort_visible',
+    ]) {
       if (typeof model[evidenceField] !== 'boolean') {
         errors.push(`${field}.${evidenceField} must be boolean`);
+      }
+    }
+  } else {
+    if (typeof model.evidence !== 'string' || !model.evidence.trim()) {
+      errors.push(`${field}.evidence must be a non-empty local evidence note`);
+    }
+    if (model.status === 'verified' && (typeof model.observed !== 'string' || !model.observed.trim())) {
+      errors.push(`${field}.observed is required when status is verified`);
+    }
+    if (field === 'chatgpt_model') {
+      if (typeof model.requested_effort !== 'string' || !model.requested_effort.trim()) {
+        errors.push(`${field}.requested_effort must be a non-empty string`);
+      }
+      for (const evidenceField of ['preflight_visible', 'postflight_visible']) {
+        if (typeof model[evidenceField] !== 'boolean') {
+          errors.push(`${field}.${evidenceField} must be boolean`);
+        }
       }
     }
   }
@@ -216,7 +252,9 @@ export function validateReceipt(receipt) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
     return ['receipt must be a JSON object'];
   }
-  if (receipt.schema_version !== 2) errors.push('schema_version must be 2');
+  if (!SUPPORTED_RECEIPT_SCHEMAS.has(receipt.schema_version)) {
+    errors.push(`schema_version must be one of ${[...SUPPORTED_RECEIPT_SCHEMAS].join(', ')}`);
+  }
   if (typeof receipt.packet_id !== 'string' || !receipt.packet_id.trim()) {
     errors.push('missing packet_id');
   }
@@ -277,10 +315,17 @@ export function validateReceipt(receipt) {
 export function receiptCompletionErrors(receipt) {
   const errors = validateReceipt(receipt);
   if (errors.length) return errors;
+  if (receipt.schema_version !== CURRENT_RECEIPT_SCHEMA) {
+    return ['complete receipt requires schema_version 3 with independent model and reasoning-effort evidence'];
+  }
   if (receipt.codex_model.status !== 'verified') errors.push('codex_model is not verified');
   if (receipt.chatgpt_model.status !== 'verified') errors.push('chatgpt_model is not verified');
-  if (!receipt.chatgpt_model.preflight_visible) errors.push('chatgpt_model preflight evidence is not verified');
-  if (!receipt.chatgpt_model.postflight_visible) errors.push('chatgpt_model postflight evidence is not verified');
+  for (const field of [
+    'preflight_model_visible', 'preflight_effort_visible',
+    'postflight_model_visible', 'postflight_effort_visible',
+  ]) {
+    if (!receipt.chatgpt_model[field]) errors.push(`chatgpt_model.${field} is not verified`);
+  }
   if (receipt.browser_transport !== 'verified') errors.push('browser transport is not verified');
   for (const field of PRIVACY_FIELDS) {
     if (!receipt.privacy_review[field]) errors.push(`privacy_review.${field} is not passed`);

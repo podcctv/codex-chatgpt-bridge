@@ -11,6 +11,7 @@ import {
   estimateTokens,
   receiptCompletionErrors,
   validatePacket,
+  validateReceipt,
   verifyReceiptArtifacts,
 } from '../scripts/validate-handoff.mjs';
 import { inspectInstallation } from '../scripts/skill-doctor.mjs';
@@ -118,7 +119,7 @@ async function makeRun(root) {
   await writeFile(join(root, 'result.md'), resultText, 'utf8');
   await writeFile(join(root, 'browser-evidence.md'), browserEvidence, 'utf8');
   const receipt = {
-    schema_version: 2,
+    schema_version: 3,
     packet_id: 'regression-001',
     artifacts: {
       packet: { path: 'packet.md', sha256: digest(packetText), approximate_tokens: estimateTokens(packetText) },
@@ -127,8 +128,10 @@ async function makeRun(root) {
     },
     codex_model: { requested: 'test model', observed: 'test model', status: 'verified', evidence: 'synthetic test' },
     chatgpt_model: {
-      requested: 'GPT-6', requested_effort: 'High', observed: 'GPT-6 / High', status: 'verified',
-      evidence: 'synthetic test', preflight_visible: true, postflight_visible: true,
+      requested: 'GPT-6', requested_effort: 'High', observed_model: 'GPT-6', observed_effort: 'High', status: 'verified',
+      evidence_model: 'Model selector visibly shows GPT-6.', evidence_effort: 'Thinking-effort control visibly shows High.',
+      preflight_model_visible: true, preflight_effort_visible: true,
+      postflight_model_visible: true, postflight_effort_visible: true,
     },
     privacy_review: {
       scope_minimized: true, credentials_scan_passed: true, semantic_privacy_reviewed: true,
@@ -151,6 +154,33 @@ test('complete receipt accepts matching, semantically valid artifacts', async (t
   const receipt = await makeRun(root);
   assert.deepEqual(receiptCompletionErrors(receipt), []);
   assert.deepEqual(await verifyReceiptArtifacts(receipt, root), []);
+});
+
+test('verified ChatGPT selection requires separate exact model and effort evidence', async (t) => {
+  const root = join(await tempDirectory(t), 'run');
+  const receipt = await makeRun(root);
+  receipt.chatgpt_model.observed_model = 'GPT-6 / High';
+  assert.ok(validateReceipt(receipt).some((error) => error.includes('observed_model must match the requested model exactly')));
+
+  receipt.chatgpt_model.observed_model = 'GPT-6';
+  receipt.chatgpt_model.observed_effort = 'Medium';
+  assert.ok(validateReceipt(receipt).some((error) => error.includes('observed_effort must match the requested effort exactly')));
+
+  receipt.chatgpt_model.observed_effort = 'High';
+  receipt.chatgpt_model.postflight_model_visible = false;
+  assert.ok(receiptCompletionErrors(receipt).some((error) => error.includes('postflight_model_visible')));
+});
+
+test('legacy combined-selection receipts remain readable but cannot be marked complete', async (t) => {
+  const root = join(await tempDirectory(t), 'run');
+  const receipt = await makeRun(root);
+  receipt.schema_version = 2;
+  receipt.chatgpt_model = {
+    requested: 'GPT-6', requested_effort: 'High', observed: 'GPT-6 / High', status: 'verified',
+    evidence: 'Legacy combined selection note.', preflight_visible: true, postflight_visible: true,
+  };
+  assert.deepEqual(validateReceipt(receipt), []);
+  assert.ok(receiptCompletionErrors(receipt).some((error) => error.includes('requires schema_version 3')));
 });
 
 test('complete CLI resolves an explicit artifact root independently of its working directory', async (t) => {
