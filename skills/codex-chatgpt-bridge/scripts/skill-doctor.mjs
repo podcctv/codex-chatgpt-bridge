@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { consentStatus, defaultConsentPath } from './automation-consent.mjs';
 
 const currentFile = fileURLToPath(import.meta.url);
 const defaultSkillRoot = dirname(dirname(currentFile));
@@ -19,6 +20,7 @@ const requiredFiles = [
   ['cf_config', 'scripts/set_cf_api_config.ps1'],
   ['validator', 'scripts/validate-handoff.mjs'],
   ['automation_consent', 'scripts/automation-consent.mjs'],
+  ['automation_disclosure', 'references/automation-disclosure.md'],
   ['skill_doctor', 'scripts/skill-doctor.mjs'],
   ['bridge_operations', 'references/bridge-operations.md'],
   ['router_policy', 'references/router-policy.md'],
@@ -67,7 +69,11 @@ async function compareSkillRoots(skillRoot, compareRoot) {
   return differences;
 }
 
-export async function inspectInstallation(skillRoot = defaultSkillRoot, compareRoot = undefined) {
+export async function inspectInstallation(
+  skillRoot = defaultSkillRoot,
+  compareRoot = undefined,
+  consentStateFile = defaultConsentPath(),
+) {
   const normalizedRoot = resolve(skillRoot);
   const checks = await Promise.all(
     requiredFiles.map(([id, relativePath]) => fileCheck(normalizedRoot, id, relativePath)),
@@ -115,6 +121,10 @@ export async function inspectInstallation(skillRoot = defaultSkillRoot, compareR
     : checks.every((check) => check.ok)
       ? 'READY'
       : 'INVALID_INSTALLATION';
+  const browserAutomationConsent = await consentStatus(
+    consentStateFile,
+    join(normalizedRoot, 'references', 'automation-disclosure.md'),
+  );
 
   return {
     schema_version: 1,
@@ -125,6 +135,7 @@ export async function inspectInstallation(skillRoot = defaultSkillRoot, compareR
     minimum_node_major: minimumNodeMajor,
     checks,
     comparison,
+    browser_automation_consent: browserAutomationConsent,
   };
 }
 
@@ -175,7 +186,8 @@ async function main() {
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log(`Codex bridge Doctor: ${result.status}`);
+    console.log(`Codex bridge package Doctor: ${result.status}`);
+    console.log(`Browser automation consent: ${result.browser_automation_consent.status}`);
     for (const check of result.checks) {
       console.log(`${check.ok ? 'PASS' : 'FAIL'} ${check.id}: ${check.path}`);
       for (const difference of check.differences ?? []) {

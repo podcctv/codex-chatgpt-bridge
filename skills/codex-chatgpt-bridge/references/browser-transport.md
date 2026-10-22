@@ -2,7 +2,7 @@
 
 Use the Codex in-app Browser in the Mac or Windows ChatGPT desktop app. Keep the same ChatGPT tab through one submission and one visible response copy. The transport is Unofficial Experimental.
 
-If `browser:control-in-app-browser` is unavailable, a single task may use the current Codex in-app Browser only when the user explicitly authorizes this fallback in the current conversation and runtime inventory identifies it as a first-party in-app browser (`type: "iab"`). This exception permits that specific transport from the current Codex desktop session. It does not permit Edge/Chrome extensions, ordinary browsers, MCP Apps, direct APIs, alternate models, or switching transports mid-run. Versioned risk consent and all packet privacy checks still apply.
+If `browser:control-in-app-browser` is unavailable, a single task may use the current Codex in-app Browser only when the user explicitly authorizes this fallback in the current conversation and runtime inventory identifies it as a first-party in-app browser (`type: "iab"`). This exception permits that specific transport from the current Codex desktop session. It does not permit Edge/Chrome extensions, ordinary browsers, MCP Apps, direct APIs, alternate models, or switching transports mid-run. Current risk-disclosure consent and all packet privacy checks still apply.
 
 Automatic preflight returns exactly one status:
 

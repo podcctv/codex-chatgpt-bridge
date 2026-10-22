@@ -19,7 +19,7 @@ Default posture:
 
 - Codex owns source edits, tests, builds, git operations, local verification, and final reporting.
 - ChatGPT owns high-depth reasoning, broad review, visual/PDF/screenshot analysis, and independent go/no-go critique.
-- The local bridge defaults to one narrow workspace, read-only access, and no secrets.
+- Local bridge guidance defaults to one narrow workspace, read-only tasks, and no secrets; those are policy defaults, not per-level enforcement by DevSpace.
 - ChatGPT recommendations are advice until Codex verifies them locally.
 - Browser automation consent does not grant local bridge access, and local bridge OAuth does not grant browser automation consent.
 
@@ -60,7 +60,7 @@ This path sends one sanitized context packet to ChatGPT in the in-app Browser an
 Before each automated browser handoff:
 
 1. Run `node scripts/skill-doctor.mjs --json`; continue only on `READY`.
-2. Run `node scripts/automation-consent.mjs status --json`. If consent is missing or stale, show the exact disclosure in `references/skill-doctor.md` and wait for explicit consent in the current conversation. If disabled, do not open or control ChatGPT. This consent applies only to experimental browser automation.
+2. Run `node scripts/automation-consent.mjs status --json`. If consent is missing, stale, or unavailable, show the exact text in `references/automation-disclosure.md` and wait for explicit consent in the current conversation. If disabled, do not open or control ChatGPT. This consent applies only to experimental browser automation.
 3. Confirm the supported desktop and in-app Browser transport, visible signed-in state, and absence of blockers. Verify the model and reasoning effort as separate UI facts: an accessibility label is only a hint, so compare it with the rendered control and its opened menu when they conflict. A `思考强度`/"Thinking effort" control showing **High** proves effort only, never the model. Set or verify **High** first, then select and verify **GPT-6** unless the user specified another model and effort. If either value is missing, ambiguous, or contradicted by the visible UI, stop before sending and use the `NEEDS_MODEL_SELECTION` pause/resume path in `references/browser-transport.md`; never silently substitute or guess.
 4. Create a privacy-reviewed 1–3K token packet using `references/context-packet.md`, append the contract in `references/reasoning-request.md`, and validate it with `node scripts/validate-handoff.mjs packet <packet-file>`. Keep the validated packet local while awaiting a user takeover; do not discard it or submit it early.
 5. Submit exactly once, wait for one completed answer, and copy once using the verified copy control in that assistant response's action row. Do not extract response text from the page or retry an indeterminate submission. If the copied answer fails validation, stop and report the validator errors; do not send a repair turn.
@@ -68,6 +68,8 @@ Before each automated browser handoff:
 7. Record redacted metadata in a local receipt; ChatGPT must not author it. Run the `complete` validator only when the model evidence, artifacts, adoption, local changes, and checks all meet its requirements. Otherwise preserve an honest incomplete status.
 
 The consent status, browser preflight/postflight, model selection, validators, and receipt contract are detailed in the linked references. Do not store raw packet or response text in the receipt, and never put local audit artifacts or private browser evidence in the public repository.
+
+The browser consent status is a Skill workflow gate, not a host-level lock on the Browser tool. Respect disabled or missing consent even if the tool is available; do not claim the state file technically disables browser capability.
 
 Use examples only when drafting a concrete handoff.
 
@@ -204,9 +206,9 @@ Use `ROUTE_HUMAN_APPROVAL` before privileged, destructive, irreversible, externa
 Choose the lowest sufficient permission level:
 
 - `L0_NO_TOOL`: prompt-only ChatGPT reasoning.
-- `L1_READ_ONLY`: the local bridge may open/list/read/search in one narrow workspace.
-- `L2_DIAGNOSTIC_COMMANDS`: non-mutating commands such as `rg`, listing, `git status`, `git diff --stat`, static analysis, dry-runs, test discovery, and read-only ERC/DRC checks.
-- `L3_WORKSPACE_WRITE`: scoped writes inside the approved workspace. Default is report outputs under a designated review directory; when the user runs ChatGPT as an independent agent it also covers source writes and self-verification (project tests/build/lint) inside the one narrow root - never installs, git commit/push/history, deletes beyond the task, secrets, or anything outside the root.
+- `L1_READ_ONLY`: requested read-only inspection in one narrow workspace; this label does not disable write or shell tools.
+- `L2_DIAGNOSTIC_COMMANDS`: requested non-mutating diagnostics such as `rg`, listing, `git status`, `git diff --stat`, static analysis, dry-runs, test discovery, and read-only ERC/DRC checks; `run_shell` remains unrestricted by this label.
+- `L3_WORKSPACE_WRITE`: source or report writes requested inside the approved workspace. Default is report outputs under a designated review directory; when the user runs ChatGPT as an independent agent it also covers source writes and self-verification (project tests/build/lint) inside the one narrow root - never installs, git commit/push/history, deletes beyond the task, secrets, or anything outside the root. The task grant is policy only and does not add a technical boundary.
 - `L4_PRIVILEGED_ROOT`: exact privileged/admin action only, human approval by default.
 - `L5_IRREVERSIBLE_EXTERNAL`: destructive, costly, hardware-impacting, or externally irreversible actions, always human approval.
 
@@ -221,7 +223,7 @@ Forbidden by default through the local bridge:
 
 Exception: the user may lift the source-edit item by granting the `L3_WORKSPACE_WRITE` independent-agent profile (`CHATGPT_ARCHITECT`). That covers only source writes and self-verification inside the narrow root; every other item above stays forbidden.
 
-Enforcement reality: these levels are policy, not a sandbox. devspace exposes `read_file`, `write_file`, `edit_file`, `grep_files`, `find_files`, `list_directory`, and `run_shell` to any OAuth-authorized app; the file tools are root-scoped but `run_shell` is not, so an authorized ChatGPT app effectively has local-user code execution. The only enforced boundaries are OAuth approval, `allowedRoots` (file tools only), and closing the channel with controller `Off` (low-level `Stop`). Keep the root narrow and secret-free, review diffs before any commit/push, and use `Off` when done. See `references/router-policy.md` "Enforcement reality".
+Enforcement reality: these levels are policy, not a sandbox. devspace exposes `read_file`, `write_file`, `edit_file`, `grep_files`, `find_files`, `list_directory`, and `run_shell` to any OAuth-authorized app; the file tools are root-scoped but `run_shell` is not, so an authorized ChatGPT app effectively has local-user code execution. Do not enable standing or level-based auto-approval for local bridge calls. Get explicit current-task user authorization for the root and intended actions, inspect each request against that scope, keep the root narrow and secret-free, review diffs before any commit/push, and use `Off` when done. See `references/router-policy.md` "Enforcement reality".
 
 ## Handoff Discipline
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 import { realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const CONSENT_SCHEMA_VERSION = 1;
-export const DISCLOSURE_VERSION = 1;
 export const RISK_ACKNOWLEDGEMENT = 'I_ACCEPT_EXPERIMENTAL_BROWSER_AUTOMATION_RISK_V1';
 
 const currentFile = fileURLToPath(import.meta.url);
@@ -17,7 +17,25 @@ export function defaultConsentPath(environment = process.env) {
   return join(codexHome, 'codex-chatgpt-bridge', 'automation-consent.json');
 }
 
-export async function consentStatus(stateFile = defaultConsentPath()) {
+export function defaultDisclosurePath() {
+  return resolve(dirname(currentFile), '..', 'references', 'automation-disclosure.md');
+}
+
+async function disclosureDigest(disclosureFile = defaultDisclosurePath()) {
+  const body = await readFile(resolve(disclosureFile));
+  if (!body.toString('utf8').trim()) {
+    const error = new Error('automation disclosure is empty');
+    error.code = 'EMPTY_DISCLOSURE';
+    throw error;
+  }
+  const normalizedDisclosure = body.toString('utf8').replace(/\r\n/g, '\n');
+  return createHash('sha256').update(normalizedDisclosure, 'utf8').digest('hex');
+}
+
+export async function consentStatus(
+  stateFile = defaultConsentPath(),
+  disclosureFile = defaultDisclosurePath(),
+) {
   let state;
   try {
     state = JSON.parse(await readFile(resolve(stateFile), 'utf8'));
@@ -26,11 +44,17 @@ export async function consentStatus(stateFile = defaultConsentPath()) {
   }
 
   if (!validStateShape(state)) return statusResult('invalid_state');
-  if (state.disclosure_version !== DISCLOSURE_VERSION) {
-    return statusResult('stale_disclosure');
-  }
   if (!state.browser_automation_enabled) {
     return statusResult('user_disabled', false, 'AUTOMATION_DISABLED');
+  }
+  let currentDisclosureDigest;
+  try {
+    currentDisclosureDigest = await disclosureDigest(disclosureFile);
+  } catch {
+    return statusResult('disclosure_unavailable');
+  }
+  if (state.disclosure_sha256 !== currentDisclosureDigest) {
+    return statusResult('stale_disclosure');
   }
   return statusResult(undefined, true, 'READY');
 }
@@ -39,12 +63,16 @@ export async function writeConsentDecision(
   stateFile,
   browserAutomationEnabled,
   decidedAt = new Date().toISOString(),
+  disclosureFile = defaultDisclosurePath(),
 ) {
   const target = resolve(stateFile);
+  const disclosureSha256 = browserAutomationEnabled
+    ? await disclosureDigest(disclosureFile)
+    : null;
   const state = {
     schema_version: CONSENT_SCHEMA_VERSION,
-    disclosure_version: DISCLOSURE_VERSION,
     browser_automation_enabled: browserAutomationEnabled,
+    disclosure_sha256: disclosureSha256,
     decided_at: decidedAt,
   };
   const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
@@ -63,7 +91,7 @@ export async function writeConsentDecision(
     });
   }
 
-  return consentStatus(target);
+  return consentStatus(target, disclosureFile);
 }
 
 function validStateShape(state) {
@@ -71,7 +99,6 @@ function validStateShape(state) {
     && typeof state === 'object'
     && !Array.isArray(state)
     && state.schema_version === CONSENT_SCHEMA_VERSION
-    && Number.isInteger(state.disclosure_version)
     && typeof state.browser_automation_enabled === 'boolean'
     && typeof state.decided_at === 'string'
     && !Number.isNaN(Date.parse(state.decided_at));
@@ -84,7 +111,6 @@ function statusResult(
 ) {
   return {
     schema_version: CONSENT_SCHEMA_VERSION,
-    disclosure_version: DISCLOSURE_VERSION,
     status,
     browser_automation_enabled: browserAutomationEnabled,
     reason: reason ?? null,
@@ -157,9 +183,21 @@ async function main() {
     return;
   }
 
-  const result = options.command === 'status'
-    ? await consentStatus(options.stateFile)
-    : await writeConsentDecision(options.stateFile, options.command === 'enable');
+  let result;
+  try {
+    result = options.command === 'status'
+      ? await consentStatus(options.stateFile)
+      : await writeConsentDecision(options.stateFile, options.command === 'enable');
+  } catch (error) {
+    result = statusResult(
+      error?.code === 'ENOENT' || error?.code === 'EMPTY_DISCLOSURE'
+        ? 'disclosure_unavailable'
+        : 'write_failed',
+    );
+    printResult(result, options.json);
+    process.exitCode = 2;
+    return;
+  }
   printResult(result, options.json);
   process.exitCode = options.command === 'status' && result.status !== 'READY' ? 1 : 0;
 }

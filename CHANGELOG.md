@@ -13,6 +13,13 @@ see the Security Model section in [README.md](README.md).
 - Unified the existing `codex-chatgpt-bridge` entrypoint with a consented, one-turn in-app Browser handoff for `L0_NO_TOOL` reasoning, including visible model checks, packet/result validation, and a redacted local completion receipt.
 - Added automation-consent state, a static Skill Doctor, and focused regression tests for the browser handoff contracts.
 - Documented the separate authorization boundaries for direct browser handoffs and OAuth-gated DevSpace access.
+- Added a single-source browser automation disclosure and a Doctor field that reports browser consent separately from package readiness.
+
+### Changed
+
+- Removed level-based auto-approval guidance for DevSpace tasks. `L1`–`L3` are policy labels, so local bridge use now requires explicit task-scoped user authorization and action-by-action scope checks.
+- Bound enabled browser consent to the SHA-256 digest of the exact disclosure text; editing the disclosure now invalidates prior enabled consent automatically, while a disabled decision remains disabled.
+- Clarified that browser consent is an agent workflow gate, not a host-level lock on browser capabilities.
 
 ## [0.3.0] - 2026-07-23
 

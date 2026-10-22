@@ -12,7 +12,7 @@ Required package paths must be readable regular files. To compare the controlled
 node scripts/skill-doctor.mjs --compare-root /path/to/other/codex-chatgpt-bridge
 ```
 
-The comparison covers the controlled skill, bridge scripts, handoff tools, and references listed by this Doctor and reports SHA-256 differences. It does not prove code safety or runtime health. `READY` without `--compare-root` checks only this installation's required files, package name, and Node runtime. Use the service `Doctor` action separately to verify the live local bridge.
+The comparison covers the controlled skill, bridge scripts, handoff tools, and references listed by this Doctor and reports SHA-256 differences. It does not prove code safety or runtime health. `READY` checks only this installation's required files, package name, and Node runtime. The output reports browser automation consent separately as `browser_automation_consent`; a healthy package can still have browser automation disabled or waiting for consent. Use the service `Doctor` action separately to verify the live local bridge.
 
 Run the focused regression suite after changing the validator, consent state, Skill Doctor, or packet contract:
 
@@ -24,7 +24,7 @@ Doctor does not run this suite automatically. A `READY` result checks package pr
 
 Continue only when it returns `READY`. Report `MISSING_RUNTIME` when Node.js 18 or newer is unavailable. Report `INVALID_INSTALLATION` with the failed check IDs when required Skill files are missing or the installed package name is wrong.
 
-Before opening or claiming ChatGPT, check the versioned automation decision:
+Before opening or claiming ChatGPT, check the automation decision:
 
 ```bash
 node scripts/automation-consent.mjs status --json
@@ -32,13 +32,11 @@ node scripts/automation-consent.mjs status --json
 
 Possible statuses:
 
-- `NEEDS_AUTOMATION_CONSENT`: no current decision exists, the file is invalid, or the disclosure changed.
+- `NEEDS_AUTOMATION_CONSENT`: no current decision exists, the file is invalid, the disclosure changed, or the disclosure file is unavailable.
 - `AUTOMATION_DISABLED`: the user declined or revoked automatic browser handoff.
-- `READY`: the current disclosure was explicitly accepted.
+- `READY`: the exact current disclosure text was explicitly accepted.
 
-For `NEEDS_AUTOMATION_CONSENT`, show this disclosure without softening it:
-
-> Unofficial Experimental browser automation submits prompts to and retrieves outputs from ChatGPT web using your signed-in session. This carries non-zero account and policy risk and may trigger safeguards, temporary restrictions, or account action. The project cannot guarantee account safety, policy compliance, or permanent quota separation. It is not intended to bypass limits. Enable it only if you understand and accept this risk.
+For `NEEDS_AUTOMATION_CONSENT`, show the complete text in [`references/automation-disclosure.md`](automation-disclosure.md) without softening it. Consent stores a SHA-256 digest of that file, so any content change invalidates prior enabled consent automatically. A disabled decision remains disabled across disclosure changes.
 
 Ask whether to enable full automatic browser handoff. An affirmative response must be explicit and present in the current conversation. Silence, invoking the Skill, or an unrelated reply is not consent. Only then run:
 
@@ -46,12 +44,14 @@ Ask whether to enable full automatic browser handoff. An affirmative response mu
 node scripts/automation-consent.mjs enable --acknowledge-risk I_ACCEPT_EXPERIMENTAL_BROWSER_AUTOMATION_RISK_V1 --json
 ```
 
+The acknowledgement token is public and is only an accidental-use check; it does not authenticate the user or prove that the disclosure was shown. Consent is an agent workflow gate, not a host-level browser lock. It cannot remove the Browser tool from an agent that ignores this Skill. Treat `AUTOMATION_DISABLED` and `NEEDS_AUTOMATION_CONSENT` as stop states even when the Browser tool is available.
+
 On decline run `node scripts/automation-consent.mjs disable --json`. For `AUTOMATION_DISABLED`, do not open, claim, inspect, or control ChatGPT.
 
 Then perform the volatile browser checks on every handoff:
 
 1. Inspect the runtime surface. Return `NEEDS_DESKTOP_APP` only when it explicitly identifies CLI, IDE, cloud, Linux, or another unsupported surface.
-2. On a supported Mac or Windows desktop surface, return `NEEDS_BROWSER` when the `browser:control-in-app-browser` Skill or its in-app Browser capability is unavailable. Exception: if the user explicitly authorized the current Codex in-app Browser fallback in this conversation, verify that the runtime exposes a first-party in-app browser with `type: "iab"` and that it can perform the same visible checks and one-submit/one-copy workflow. This exception allows that specific transport even when the standard sub-skill is missing; it does not waive versioned risk consent or privacy requirements and does not allow Edge/Chrome extensions, ordinary browsers, direct APIs, or another model. If the exception is not both authorized and available, return `NEEDS_BROWSER`.
+2. On a supported Mac or Windows desktop surface, return `NEEDS_BROWSER` when the `browser:control-in-app-browser` Skill or its in-app Browser capability is unavailable. Exception: if the user explicitly authorized the current Codex in-app Browser fallback in this conversation, verify that the runtime exposes a first-party in-app browser with `type: "iab"` and that it can perform the same visible checks and one-submit/one-copy workflow. This exception allows that specific transport even when the standard sub-skill is missing; it does not waive current risk-disclosure consent or privacy requirements and does not allow Edge/Chrome extensions, ordinary browsers, direct APIs, or another model. If the exception is not both authorized and available, return `NEEDS_BROWSER`.
 3. Open or claim `https://chatgpt.com/` only in the in-app Browser.
 4. Check visible account UI. If logged out, report `NEEDS_CHATGPT_LOGIN`, ask the user to take over the page, and preserve the original task for resume.
 5. Check the requested model and reasoning effort in visible UI as two independent values. If the user has not specified them for this task, set or verify reasoning effort **High** first, then select and verify **GPT-6**. Do not trust an accessibility description alone when the rendered label or opened menu disagrees; a `思考强度`/"Thinking effort" menu showing High is evidence of effort only. If the selected model name or effort cannot be visibly confirmed, report `NEEDS_MODEL_SELECTION`, preserve the Packet draft, and ask the user to take over model selection in the same in-app Browser tab. On the next user message, recheck only volatile browser state and resume only if all checks pass. Never submit early or silently substitute another model or effort.

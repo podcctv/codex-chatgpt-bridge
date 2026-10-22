@@ -54,7 +54,7 @@ The control layer is deliberately external. A bridge cannot restart itself once 
 
 ## Two Handoff Paths
 
-Use the direct browser path when a single, bounded reasoning request can be answered from a privacy-reviewed packet. It uses the in-app Browser, requires current explicit consent to experimental automation, and grants ChatGPT no tools or repository access. The default visible selection is reasoning effort **High**, then **GPT-6**; the handoff stops if either selection or a required browser check cannot be verified.
+Use the direct browser path when a single, bounded reasoning request can be answered from a privacy-reviewed packet. It uses the in-app Browser, requires current explicit consent to experimental automation, and grants ChatGPT no tools or repository access. The consent state is bound to the exact disclosure text and is an agent workflow gate, not a host-level browser lock. The default visible selection is reasoning effort **High**, then **GPT-6**; the handoff stops if either selection or a required browser check cannot be verified.
 
 Use DevSpace when ChatGPT needs scoped local file or diagnostic access. Its OAuth authorization, narrow `allowedRoots`, `L1`–`L5` policy, and controller lifecycle are independent from browser consent. Neither path inherits authorization from the other. Codex validates imported advice and owns local edits, tests, git, and final claims.
 
@@ -214,6 +214,8 @@ Two rules before you approve anything: confirm the exposed project root is corre
 ## Security Model
 
 Be honest about the trust boundary: once you OAuth-authorize the ChatGPT app, the bridge grants file read/write and shell execution on your machine. Being a skill rather than a sandbox is the load-bearing caveat here: the `L0`–`L5` levels are policy that Codex instructs ChatGPT to follow, not something the bridge enforces. Because `run_shell` is not confined to the root, an authorized app effectively holds local-user code execution. Only three boundaries are actually enforced, and two of them are DevSpace's: OAuth approval (a strong random Owner password) and the narrow `allowedRoots` for file tools. The third is this repo's contribution — closing reachability with controller `Off`, which is why an easy `Off` matters more than the level table.
+
+Do not use standing or level-based auto-approval for DevSpace calls. Before a local-bridge task, get explicit user authorization for the root and intended actions, then check each request against that task scope. `L1`–`L3` describe requested behavior; they do not make an OAuth-authorized app read-only or confine its shell. `L0_NO_TOOL` needs no local-bridge approval; automated browser handoffs still require their separate current consent.
 
 Practical rules:
 

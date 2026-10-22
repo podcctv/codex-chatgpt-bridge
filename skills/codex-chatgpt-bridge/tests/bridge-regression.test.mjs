@@ -18,7 +18,6 @@ import { inspectInstallation } from '../scripts/skill-doctor.mjs';
 import {
   consentStatus,
   defaultConsentPath,
-  DISCLOSURE_VERSION,
   RISK_ACKNOWLEDGEMENT,
   writeConsentDecision,
 } from '../scripts/automation-consent.mjs';
@@ -290,13 +289,21 @@ test('complete receipt rejects a symlink that resolves outside its artifact root
 test('Doctor reports identical copies READY and names controlled-file drift', async (t) => {
   const copyRoot = join(await tempDirectory(t), 'skill-copy');
   await cp(skillRoot, copyRoot, { recursive: true });
-  let report = await inspectInstallation(skillRoot, copyRoot);
+  const consentStateFile = join(copyRoot, 'missing-consent-state.json');
+  let report = await inspectInstallation(skillRoot, copyRoot, consentStateFile);
   assert.equal(report.status, 'READY');
   assert.equal(report.comparison.differences.length, 0);
+  assert.equal(report.browser_automation_consent.status, 'NEEDS_AUTOMATION_CONSENT');
+
+  const disabledStateFile = join(copyRoot, 'disabled-consent-state.json');
+  await writeConsentDecision(disabledStateFile, false);
+  report = await inspectInstallation(skillRoot, undefined, disabledStateFile);
+  assert.equal(report.status, 'READY');
+  assert.equal(report.browser_automation_consent.status, 'AUTOMATION_DISABLED');
 
   const doctorGuide = join(copyRoot, 'references', 'skill-doctor.md');
   await writeFile(doctorGuide, `${await readFile(doctorGuide, 'utf8')}\nDrift fixture.\n`, 'utf8');
-  report = await inspectInstallation(skillRoot, copyRoot);
+  report = await inspectInstallation(skillRoot, copyRoot, consentStateFile);
   const consistencyCheck = report.checks.find((check) => check.id === 'skill_copy_consistency');
   assert.equal(report.status, 'INVALID_INSTALLATION');
   assert.ok(consistencyCheck.differences.some((difference) => difference.path === 'references/skill-doctor.md'));
@@ -346,9 +353,49 @@ test('consent remains isolated to the test state file and requires the exact ack
 
   await writeFile(stateFile, JSON.stringify({
     schema_version: 1,
-    disclosure_version: DISCLOSURE_VERSION - 1,
+    disclosure_version: 1,
+    browser_automation_enabled: false,
+    decided_at: new Date().toISOString(),
+  }), 'utf8');
+  assert.equal((await consentStatus(stateFile)).status, 'AUTOMATION_DISABLED');
+
+  await writeFile(stateFile, JSON.stringify({
+    schema_version: 1,
+    disclosure_version: 1,
     browser_automation_enabled: true,
     decided_at: new Date().toISOString(),
   }), 'utf8');
-  assert.equal((await consentStatus(stateFile)).status, 'NEEDS_AUTOMATION_CONSENT');
+  const legacyEnabled = await consentStatus(stateFile);
+  assert.equal(legacyEnabled.status, 'NEEDS_AUTOMATION_CONSENT');
+  assert.equal(legacyEnabled.reason, 'stale_disclosure');
+});
+
+test('enabled consent is invalidated by any disclosure content change while disabled stays disabled', async (t) => {
+  const stateRoot = await mkdtemp(join(skillRoot, 'tests', '.disclosure-hash-'));
+  t.after(() => rm(stateRoot, { recursive: true, force: true }));
+  const stateFile = join(stateRoot, 'automation-consent.json');
+  const disclosureFile = join(stateRoot, 'automation-disclosure.md');
+  await writeFile(disclosureFile, 'Risk disclosure version one.\n', 'utf8');
+
+  const enabled = await writeConsentDecision(stateFile, true, undefined, disclosureFile);
+  assert.equal(enabled.status, 'READY');
+  assert.match(JSON.parse(await readFile(stateFile, 'utf8')).disclosure_sha256, /^[a-f0-9]{64}$/);
+
+  await writeFile(disclosureFile, 'Risk disclosure version one.\r\n', 'utf8');
+  assert.equal((await consentStatus(stateFile, disclosureFile)).status, 'READY');
+
+  await rm(disclosureFile);
+  const unavailable = await consentStatus(stateFile, disclosureFile);
+  assert.equal(unavailable.status, 'NEEDS_AUTOMATION_CONSENT');
+  assert.equal(unavailable.reason, 'disclosure_unavailable');
+
+  await writeFile(disclosureFile, 'Risk disclosure version two.\n', 'utf8');
+  const stale = await consentStatus(stateFile, disclosureFile);
+  assert.equal(stale.status, 'NEEDS_AUTOMATION_CONSENT');
+  assert.equal(stale.reason, 'stale_disclosure');
+
+  const disabled = await writeConsentDecision(stateFile, false, undefined, disclosureFile);
+  assert.equal(disabled.status, 'AUTOMATION_DISABLED');
+  await rm(disclosureFile);
+  assert.equal((await consentStatus(stateFile, disclosureFile)).status, 'AUTOMATION_DISABLED');
 });
