@@ -258,10 +258,14 @@ while (`$true) { Start-Sleep -Seconds 1 }
     "-File", $installScript,
     "-CodexHome", $testCodexHome
   )
-  $backupRoot = Join-Path $testCodexHome "skills"
+  $backupRoot = Join-Path $testCodexHome "skill-backups"
   $backups = @(Get-ChildItem -LiteralPath $backupRoot -Directory | Where-Object { $_.Name -like "codex-chatgpt-bridge.backup-*" })
   if ($backups.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $backups[0].FullName "test-existing-install-marker.txt"))) {
     throw "Installer did not preserve the existing skill in one timestamped backup."
+  }
+  $discoverableSkills = @(Get-ChildItem -LiteralPath (Join-Path $testCodexHome "skills") -Directory | Where-Object { $_.Name -like "codex-chatgpt-bridge*" })
+  if ($discoverableSkills.Count -ne 1 -or $discoverableSkills[0].Name -ne "codex-chatgpt-bridge") {
+    throw "Installer left a backup under the Codex skills discovery directory."
   }
 
   $secondAllowedRoot = Join-Path $stateDir "second-allowed-root"

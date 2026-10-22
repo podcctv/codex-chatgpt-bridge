@@ -212,6 +212,6 @@ Codex then implements Task1 only, verifies locally, reports a compact result, an
 ### Profiles
 
 - Advice profile (default): the prompt above runs at `L1_READ_ONLY`/`L2`; ChatGPT plans, Codex writes `index.html` and verifies.
-- Independent-agent profile (user grants `L3_WORKSPACE_WRITE`): the same prompt is handed to ChatGPT, which writes `index.html` itself via the bridge (`write_file`/`edit_file`) and self-checks with `run_shell`, then returns the diff. Codex reviews the diff, runs an independent check, and owns git plus the final claim. ChatGPT still does not commit, push, install dependencies, delete beyond the task, touch secrets, or leave the root - and remember those limits are policy, not a bridge sandbox (see router-policy.md "Enforcement reality"), so keep the root narrow and review before any commit.
+- Independent-agent profile (user grants `L3_WORKSPACE_WRITE`): the same prompt is handed to ChatGPT, which edits `index.html` through the selected DevSpace workspace tools and self-checks with `exec_command` or `bash`, then returns the diff. Codex reviews the diff, runs an independent check, and owns git plus the final claim. ChatGPT still does not commit, push, install dependencies, delete beyond the task, touch secrets, or leave the root - and remember those limits are policy, not a bridge sandbox (see router-policy.md "Enforcement reality"), so keep the root narrow and review before any commit.
 
 

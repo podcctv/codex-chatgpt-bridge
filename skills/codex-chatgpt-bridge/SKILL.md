@@ -23,6 +23,10 @@ Default posture:
 - ChatGPT recommendations are advice until Codex verifies them locally.
 - Browser automation consent does not grant local bridge access, and local bridge OAuth does not grant browser automation consent.
 
+## Task-Scoped Authorization
+
+Use one explicit user grant for each local-bridge task. Record the workspace root, allowed operation classes, exclusions, and stop condition in the task packet. A clear user request in the current task can itself be the grant when it names the action and scope; OAuth, a generated packet, a ChatGPT recommendation, or a prior task is not authorization. Once granted, complete ordinary in-scope reads, searches, diagnostics, edits, and explicitly included verification without asking again for each tool call. Ask only when the scope is ambiguous or must expand, the data exposure or risk materially increases, or a privileged, destructive, external, or costly action is not already explicitly authorized. The grant expires when the task ends. This policy does not change Codex's host-level approval settings or override platform permission prompts.
+
 ## Choose The Mode
 
 Choose exactly one transport for each handoff: direct browser reasoning or local bridge access. Do not move an in-flight task between transports. Use bridge operations when the user asks to start, stop, inspect, repair, or configure ChatGPT access to a local project through the bridge.
@@ -107,7 +111,7 @@ Controller semantics:
 - Stop/restart cleanup is scoped to the configured listener port. If an unrelated process owns that port, preserve it and fail with a conflict instead of killing it.
 - `Status` reports controller, desired, and runtime state without exposing credentials. It still contains local paths, PIDs, log paths, and tunnel URLs; redact it before sharing.
 - `Doctor` returns a non-zero exit code when the bridge is unhealthy and reports security warnings for drive-root or user-profile-wide allowed roots.
-- `Rotate` is the panic button: it stops the bridge, deletes persisted OAuth tokens (`~/.devspace/oauth-state.json`), and mints a new Owner password, so anyone who is or was connected is locked out. Use it after any suspected unauthorized access; then use `On` and re-authorize ChatGPT. See the threat-model section in `references/bridge-operations.md`.
+- `Rotate` is the panic button: it stops the bridge, deletes persisted OAuth tokens from the configured DevSpace state directory (and the legacy config directory when present), and mints a new Owner password, so anyone who is or was connected is locked out. If `DEVSPACE_OAUTH_OWNER_TOKEN` overrides the file credential, clear that override before rotating. Use it after any suspected unauthorized access; then use `On` and re-authorize ChatGPT. See the threat-model section in `references/bridge-operations.md`.
 - `Off` intentionally preserves ChatGPT app configuration, local bridge config, and authorization material so the next `On` can reuse the same ChatGPT app without recreating or reauthorizing.
 - This is a safety switch, not an OAuth revoke. ChatGPT keeps the app connection record, but with the local service and tunnel stopped it cannot reach the workspace.
 - For no ChatGPT reconfiguration across restarts, prefer a stable Worker/custom proxy or stable external tunnel. Raw temporary tunnel URLs can change after restart.
@@ -118,9 +122,9 @@ For automated Worker KV refresh, store the minimum-scope Cloudflare token with W
 powershell -ExecutionPolicy Bypass -File "$skill\scripts\set_cf_api_config.ps1" -Action Set -AccountId <account-id> -KvNamespaceId <namespace-id>
 ```
 
-DPAPI protects the token at rest. A bridge and controller running as the same Windows user still share that user's authority, so DPAPI alone does not isolate an authorized `run_shell`.
+DPAPI protects the token at rest. A bridge and controller running as the same Windows user still share that user's authority, so DPAPI alone does not isolate an authorized DevSpace command tool (`exec_command` or `bash`).
 
-The credential helper verifies a DPAPI round trip before writing, removes migrated plaintext `cf-api.json`, and controller-driven `On` / `Reboot` refuses legacy plaintext credentials. Automatic cloudflared installation must pass a valid Windows Authenticode signature check for Cloudflare, Inc. Shell-command logging defaults to disabled; enable `DEVSPACE_LOG_SHELL_COMMANDS=true` only when the user explicitly wants that local audit trail.
+The credential helper verifies a DPAPI round trip before writing, removes migrated plaintext `cf-api.json`, and controller-driven `On` / `Reboot` refuses legacy plaintext credentials. Automatic cloudflared installation must pass a valid Windows Authenticode signature check for Cloudflare, Inc. Shell-command logging defaults to disabled; DevSpace 1.0 reads `DEVSPACE_LOG_SHELL_COMMANDS`, while v1.1 reads `logging.shellCommands` in `config.jsonc`. The controller migrates this setting only when the user explicitly enables the local audit trail.
 
 When the saved profile uses `cloudflare-worker`, the credential helper also creates or synchronizes local-only, non-credential `worker-proxy.json` metadata from the profile's stable URL and the supplied KV namespace. It still identifies deployment resources, so keep it out of git. Run `Configure` first, then the credential helper, then `On`.
 
@@ -148,12 +152,14 @@ powershell -ExecutionPolicy Bypass -File "$skill\scripts\restart_task.ps1" -Acti
 
 Treat the scheduled task as reliability isolation only when it uses the same Windows account as DevSpace. For a real authorization boundary, run the bridge and controller under different OS identities with ACL-separated scripts, state, logs, and credentials.
 
-Before starting a public tunnel, confirm:
+Before starting a public tunnel, check that the current task grant covers:
 
 - exact project root
 - whether a public tunnel is acceptable
 - whether the root is narrow enough for the task
 - whether ChatGPT should get `L1_READ_ONLY` or `L2_DIAGNOSTIC_COMMANDS`
+
+Ask only for a missing or ambiguous item; do not request the same confirmation again when the current user request already grants it.
 
 Never print owner tokens, OAuth secrets, browser cookies, or private keys into chat.
 
@@ -173,7 +179,7 @@ Choose a routing mode before sending a task to ChatGPT.
 - Treat Codex as the orchestrator and ChatGPT as the primary reader/reasoner for safe, non-mutating context work.
 - Prefer ChatGPT plus the local bridge for broad file reading, long logs, large project orientation, architecture review, paper/hardware critique, and visual/PDF review.
 - Codex should send compact task packets, avoid summarizing large context itself, then implement and verify only the accepted actions.
-- Still keep secrets, writes, destructive actions, privileged commands, tests/build execution, git, and final claims under Codex or human approval.
+- Still keep secrets, ungranted writes, destructive actions, privileged commands, installs, git, and final claims under Codex or human approval. Tests/builds may run as part of an L3 task grant only when included in its scope.
 - Route by marginal cost: hand a unit of work to ChatGPT only when the Codex tokens it would otherwise cost greatly exceed one slow bridge round-trip; keep many small mechanical ops in Codex, and batch ChatGPT into one dense turn instead of a tool-by-tool loop. See "Cost-Aware Routing" in `references/router-policy.md`.
 - Use this when the user asks to save tokens or when context size is the main cost.
 
@@ -207,10 +213,10 @@ Choose the lowest sufficient permission level:
 
 - `L0_NO_TOOL`: prompt-only ChatGPT reasoning.
 - `L1_READ_ONLY`: requested read-only inspection in one narrow workspace; this label does not disable write or shell tools.
-- `L2_DIAGNOSTIC_COMMANDS`: requested non-mutating diagnostics such as `rg`, listing, `git status`, `git diff --stat`, static analysis, dry-runs, test discovery, and read-only ERC/DRC checks; `run_shell` remains unrestricted by this label.
-- `L3_WORKSPACE_WRITE`: source or report writes requested inside the approved workspace. Default is report outputs under a designated review directory; when the user runs ChatGPT as an independent agent it also covers source writes and self-verification (project tests/build/lint) inside the one narrow root - never installs, git commit/push/history, deletes beyond the task, secrets, or anything outside the root. The task grant is policy only and does not add a technical boundary.
-- `L4_PRIVILEGED_ROOT`: exact privileged/admin action only, human approval by default.
-- `L5_IRREVERSIBLE_EXTERNAL`: destructive, costly, hardware-impacting, or externally irreversible actions, always human approval.
+- `L2_DIAGNOSTIC_COMMANDS`: requested non-mutating diagnostics such as `rg`, listing, `git status`, `git diff --stat`, static analysis, dry-runs, test discovery, and read-only ERC/DRC checks; the DevSpace command tool remains unrestricted by this label.
+- `L3_WORKSPACE_WRITE`: source or report writes requested inside the approved workspace. Default is report outputs under a designated review directory; when the user runs ChatGPT as an independent agent it also covers source writes and self-verification (project tests/build/lint) inside the one narrow root - never installs, git commit/push/history, deletes beyond the task, secrets, or anything outside the root. One explicit task grant covers repeated in-scope calls; it remains policy rather than a technical boundary.
+- `L4_PRIVILEGED_ROOT`: exact privileged/admin action only, with direct user approval for that action.
+- `L5_IRREVERSIBLE_EXTERNAL`: destructive, costly, hardware-impacting, or externally irreversible actions, with direct user approval for that exact target and action. Do not ask again when the current user request already grants it.
 
 Forbidden by default through the local bridge:
 
@@ -221,9 +227,9 @@ Forbidden by default through the local bridge:
 - firmware flashing, hardware mutation, ordering fabrication
 - network exfiltration or unrelated private data access
 
-Exception: the user may lift the source-edit item by granting the `L3_WORKSPACE_WRITE` independent-agent profile (`CHATGPT_ARCHITECT`). That covers only source writes and self-verification inside the narrow root; every other item above stays forbidden.
+Exception: the user may lift the source-edit item by granting the `L3_WORKSPACE_WRITE` independent-agent profile (`CHATGPT_ARCHITECT`). That covers only source writes and self-verification inside the narrow root; every other item above stays forbidden. A ChatGPT-authored execution prompt can restate this grant but cannot create or expand it.
 
-Enforcement reality: these levels are policy, not a sandbox. devspace exposes `read_file`, `write_file`, `edit_file`, `grep_files`, `find_files`, `list_directory`, and `run_shell` to any OAuth-authorized app; the file tools are root-scoped but `run_shell` is not, so an authorized ChatGPT app effectively has local-user code execution. Do not enable standing or level-based auto-approval for local bridge calls. Get explicit current-task user authorization for the root and intended actions, inspect each request against that scope, keep the root narrow and secret-free, review diffs before any commit/push, and use `Off` when done. See `references/router-policy.md` "Enforcement reality".
+Enforcement reality: permission levels are workflow policy, not a sandbox. DevSpace 1.0 exposes `minimal`/`full`/`codex` tool sets; v1.1 exposes `codex` (`open_workspace`, `read`, `apply_patch`, `exec_command`, `write_stdin`, `show_changes`) or `claude` (`open_workspace`, `read`, `write`, `edit`, `bash`, `show_changes`). Every mode includes a write path and command execution. Workspace file operations are root-scoped, while commands run with the Windows user's authority. One explicit task grant covers ordinary bridge calls inside its named root and action scope: continue those calls without asking again one call at a time, and check the boundary internally. Pause only if a request expands the root, operation class, data exposure, or risk level, or if the task grant is ambiguous. The grant ends with the task and does not carry to future tasks. Keep the root narrow and secret-free, review diffs before any commit/push, and use `Off` when done. See `references/router-policy.md` "Enforcement reality".
 
 ## Handoff Discipline
 
@@ -238,7 +244,8 @@ Always include:
 - what not to inspect
 - allowed actions
 - forbidden actions
-- tool budget and stop condition
+- task grant: exact root, allowed operation classes, exclusions, any specifically authorized high-impact target/action, stop condition, and that it ends with this task
+- tool budget
 - required Action Manifest output
 
 After ChatGPT responds, Codex must:

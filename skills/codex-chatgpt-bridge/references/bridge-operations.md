@@ -52,6 +52,8 @@ The credential helper derives `worker-proxy.json` from the saved `cloudflare-wor
 
 ## Switch Semantics
 
+The controller detects the installed DevSpace version before writing configuration. DevSpace 1.0 uses `config.json` plus environment settings; v1.1 uses `config.jsonc`. The controller writes the matching schema, carries forward the OAuth state directory, and removes inherited environment overrides for managed roots, URL, port, and tool settings before launching the child process. It leaves `auth.json` in the configured DevSpace config directory and keeps shell-command logging disabled unless explicitly enabled.
+
 Use `On`, `Off`, and `Restart`/`Reboot` as the operational safety switch.
 
 The controller keeps three concerns separate:
@@ -106,7 +108,7 @@ Rules:
 - Stable Worker and external public base URLs must be absolute HTTPS URLs without embedded credentials, query strings, or fragments.
 - Low-level `Stop` discovers only DevSpace listening on the configured port plus the matching cloudflared tunnel. It reports and preserves unrelated port owners.
 - Controller `Doctor.securityWarnings` flags drive-root, full-user-profile, and user-profile-ancestor allowed roots without silently changing the user's configured scope.
-- Shell-command logging defaults to disabled. Set the user-level `DEVSPACE_LOG_SHELL_COMMANDS=true` only when a local command audit trail is explicitly required.
+- Shell-command logging defaults to disabled. DevSpace 1.0 reads `DEVSPACE_LOG_SHELL_COMMANDS`; v1.1 reads `logging.shellCommands` in `config.jsonc`. The controller migrates the setting only when an explicit local command audit trail is required.
 - Controller `On` and `Restart` use strict Worker KV mode. A missing or failed KV credential is an error, and a failed health gate is cleaned up instead of being reported as success. Direct low-level `Start` can still record `needsKvUpdate: true` for a manual browser-repair flow unless `-RequireWorkerKv` is supplied.
 - Never print `ownerToken` or Owner password. If ChatGPT authorization requires it, read it locally and fill it into the browser only after explicit user confirmation.
 - After controller `Off` (or a low-level recovery `Stop`), verify no managed `@waishnav/devspace` or matching `cloudflared` process remains.
@@ -179,11 +181,11 @@ What protects you (the one gate):
 The real risks:
 - **Always-on exposure.** While the bridge runs, `/authorize` and the OAuth endpoints face the whole internet (the Worker is an open reverse proxy with no auth of its own; auth is entirely devspace's job). The single most effective control is to keep the bridge **off except when actively using it**.
 - **No rate-limit or lockout** on the password form. Safe only because `ownerToken` is high-entropy. Never replace it with a memorable `DEVSPACE_OAUTH_OWNER_TOKEN`. Optionally add a Cloudflare WAF rate-limit rule on `/authorize` and `/token`.
-- **Durable tokens; controller `Off` does not revoke.** Issued bearer/refresh tokens live in memory and in `~/.devspace/oauth-state.json`. A previously authorized client, a leaked refresh token, or a stolen `~/.devspace/auth.json` keeps access across restarts. Use low-level `-Action Rotate` to re-key (stop -> delete `oauth-state.json` -> mint a new `ownerToken`), then re-authorize your own ChatGPT. Optionally shorten `DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS` / `DEVSPACE_OAUTH_REFRESH_TOKEN_TTL_SECONDS`.
-- **Blast radius is the whole machine.** `run_shell` is not root-scoped and devspace has no read-only or no-shell mode (`DEVSPACE_TOOL_MODE=minimal` only swaps grep/ls for shell; it does not remove shell). So if someone does get in, they have local-user execution. Narrow `allowedRoots`, keep secrets out of reach, and for real isolation run the bridge under a least-privilege OS account or a disposable VM/container.
+- **Durable tokens; controller `Off` does not revoke.** Issued bearer/refresh tokens live in memory and in DevSpace's configured `storage.stateDir` (DevSpace 1.0 uses `DEVSPACE_STATE_DIR`). A previously authorized client, a leaked refresh token, or a stolen `auth.json` keeps access across restarts. Use low-level `-Action Rotate` to re-key (stop -> delete persisted OAuth state -> mint a new `ownerToken`), then re-authorize your own ChatGPT. If `DEVSPACE_OAUTH_OWNER_TOKEN` is set, clear the override first; otherwise the file credential is not active. Optionally shorten the OAuth token TTLs where supported by the installed version.
+- **Blast radius is the whole machine.** DevSpace 1.0 `minimal`/`full`/`codex` modes and v1.1 `codex`/`claude` modes all include a write path and command execution. `DEVSPACE_TOOL_MODE` was removed in v1.1; the controller translates legacy `minimal`/`full` to `claude`, and carries `codex` forward. A command can reach paths outside `workspaces.allowedRoots` and use the local Windows user's authority. Narrow allowed roots, keep secrets out of reach, and for real isolation run the bridge under a least-privilege OS account or a disposable VM/container.
 
 Detection:
-- Tool calls may still appear in process logs, but shell-command text is **not** logged by default. `Start` no longer forces `DEVSPACE_LOG_SHELL_COMMANDS=true`; operators must set the user-level `DEVSPACE_LOG_SHELL_COMMANDS=true` to write `run_shell` command text to `devspace.out.log`. After any worry, read that log only if the opt-in was enabled; otherwise use controller/status events and process inventory rather than assuming a command audit trail exists.
+- Tool calls may still appear in process logs, but shell-command text is **not** logged by default. DevSpace 1.0 reads `DEVSPACE_LOG_SHELL_COMMANDS`; v1.1 reads `logging.shellCommands` in `config.jsonc`. The controller migrates that setting and leaves it disabled by default. Command text can contain sensitive values. After an incident, use controller/status events and process inventory; do not assume command text was recorded.
 
 Hardening checklist, by leverage:
 1. Use controller `Off` when not in use; this records intentional shutdown and shrinks the public window from days to minutes.

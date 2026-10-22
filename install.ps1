@@ -24,8 +24,10 @@ New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 
 if (Test-Path -LiteralPath $target) {
   if (-not $ForceOverwrite) {
-    $stamp = Get-Date -Format "yyyyMMddHHmmss"
-    $backup = "$target.backup-$stamp"
+    $backupRoot = Join-Path $CodexHome "skill-backups"
+    New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+    $stamp = Get-Date -Format "yyyyMMddHHmmssfff"
+    $backup = Join-Path $backupRoot "codex-chatgpt-bridge.backup-$stamp"
     Move-Item -LiteralPath $target -Destination $backup
     Write-Host "Backed up existing skill to $backup"
   } else {

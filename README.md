@@ -36,13 +36,13 @@
 
 ## What This Is
 
-The MCP bridge itself is [DevSpace](https://github.com/Waishnav/devspace) — an upstream open-source project you install from npm as `@waishnav/devspace`. It owns the MCP server, OAuth, the file tools, and `run_shell`. This repository does not fork it, patch it, or wrap it in a second server.
+The MCP bridge itself is [DevSpace](https://github.com/Waishnav/devspace) — an upstream open-source project you install from npm as `@waishnav/devspace`. It owns the MCP server, OAuth, workspace file tools, and command tools. This repository does not fork it, patch it, or wrap it in a second server.
 
 This repository adds the guidance and controls needed to coordinate Codex with ChatGPT: **one skill entrypoint**, **control scripts that live outside the bridge process**, and an optional, consented one-turn browser handoff for tasks that need no local access.
 
 | Layer | Owner | Responsibility |
 |---|---|---|
-| MCP bridge | DevSpace (upstream) | MCP server, OAuth, file tools, `run_shell` |
+| MCP bridge | DevSpace (upstream) | MCP server, OAuth, workspace file tools, command tools |
 | Skill | this repo — `SKILL.md` | direct browser packets at `L0_NO_TOOL`, DevSpace bridge routing at `L1`–`L5`, task-packet and manifest formats, consent, receipts, and approval gates |
 | Control layer | this repo — `scripts/bridge_controller.ps1` | desired-state `On` / `Off` / `Reboot`, each a mutex-protected, health-verified transaction |
 | External recovery | this repo — `scripts/restart_task.ps1` | an on-demand Windows scheduled task that can reboot a bridge the agent can no longer reach |
@@ -84,7 +84,7 @@ cd codex-chatgpt-bridge
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-If a copy is already installed, the installer moves it to a timestamped backup before copying the new skill. Use `-ForceOverwrite` only when you want to discard that installed copy. Add `-RegisterRestartTask` only if you also want the optional, on-demand Reboot task.
+If a copy is already installed, the installer moves it to `%USERPROFILE%\.codex\skill-backups` before copying the new skill. The backup stays outside Codex's skill discovery directory. Use `-ForceOverwrite` only when you want to discard that installed copy. Add `-RegisterRestartTask` only if you also want the optional, on-demand Reboot task.
 
 Expected success signal:
 
@@ -213,9 +213,9 @@ Two rules before you approve anything: confirm the exposed project root is corre
 
 ## Security Model
 
-Be honest about the trust boundary: once you OAuth-authorize the ChatGPT app, the bridge grants file read/write and shell execution on your machine. Being a skill rather than a sandbox is the load-bearing caveat here: the `L0`–`L5` levels are policy that Codex instructs ChatGPT to follow, not something the bridge enforces. Because `run_shell` is not confined to the root, an authorized app effectively holds local-user code execution. Only three boundaries are actually enforced, and two of them are DevSpace's: OAuth approval (a strong random Owner password) and the narrow `allowedRoots` for file tools. The third is this repo's contribution — closing reachability with controller `Off`, which is why an easy `Off` matters more than the level table.
+Be honest about the trust boundary: once you OAuth-authorize the ChatGPT app, the bridge grants file read/write and command execution on your machine. Being a skill rather than a sandbox is the load-bearing caveat here: the `L0`–`L5` levels are policy that Codex instructs ChatGPT to follow, not something the bridge enforces. DevSpace 1.0 `minimal`/`full`/`codex` modes and v1.1 `codex`/`claude` modes all include a write path and command execution. Commands are not confined to `allowedRoots`, so an authorized app effectively holds local-user code execution. Only three boundaries are actually enforced, and two of them are DevSpace's: OAuth approval (a strong random Owner password) and the narrow `allowedRoots` for workspace file tools. The third is this repo's contribution — closing reachability with controller `Off`, which is why an easy `Off` matters more than the level table.
 
-Do not use standing or level-based auto-approval for DevSpace calls. Before a local-bridge task, get explicit user authorization for the root and intended actions, then check each request against that task scope. `L1`–`L3` describe requested behavior; they do not make an OAuth-authorized app read-only or confine its shell. `L0_NO_TOOL` needs no local-bridge approval; automated browser handoffs still require their separate current consent.
+Do not use cross-task standing approval. Get one explicit task grant naming the root, operation classes, exclusions, and stop condition. A clear current user instruction itself is the grant when it identifies the action and scope, including an exact high-impact target/action. Continue ordinary in-scope calls without asking again for each read, search, diagnostic, or authorized write. Pause only when scope, data exposure, or risk must expand, or the grant is ambiguous. The grant ends with the task. This Skill cannot change Codex's host-level approval settings or bypass platform prompts. `L1`–`L3` describe requested behavior; they do not make an OAuth-authorized app read-only or confine its command tool. `L0_NO_TOOL` needs no local-bridge grant; automated browser handoffs still require their separate current consent.
 
 Practical rules:
 
@@ -225,7 +225,8 @@ Practical rules:
 - If you suspect someone else connected, run `-Action Rotate` to revoke all tokens and re-key.
 - Controller state and logs contain local paths, PIDs, and tunnel URLs. Redact them before sharing screenshots or diagnostics.
 - Stop and restart operations identify DevSpace by the configured listening port. An unrelated process on that port is reported and preserved; recovery fails instead of killing it.
-- Shell-command logging defaults to disabled to reduce accidental secret retention. Set the user-level `DEVSPACE_LOG_SHELL_COMMANDS=true` only when you explicitly need an audit trail.
+- Shell-command logging defaults to disabled to reduce accidental secret retention. DevSpace 1.0 reads `DEVSPACE_LOG_SHELL_COMMANDS`; v1.1 reads `logging.shellCommands` from `config.jsonc`. The controller migrates the setting. Turn it on only when you need an audit trail.
+- If `DEVSPACE_OAUTH_OWNER_TOKEN` overrides the file credential, `Rotate` stops before changing state and asks you to clear the override; otherwise replacing `auth.json` would not rotate the active Owner password.
 
 ## FAQ
 
@@ -243,7 +244,7 @@ Not with a stable Worker or proxy in front. See [Reboot Without Relinking](#rebo
 
 **Can ChatGPT run anything on my machine?**
 
-Once you OAuth-authorize the app, the bridge allows file read/write and shell execution within your setup. `run_shell` is not sandboxed, so treat an authorized app as local-user execution: keep the root narrow, use controller `Off` when idle, and use `Rotate` to revoke access.
+Once you OAuth-authorize the app, the bridge allows file read/write and command execution within your setup. The command tool is not sandboxed, so treat an authorized app as local-user execution: keep the root narrow, use controller `Off` when idle, and use `Rotate` to revoke access.
 
 **Does `Off` revoke ChatGPT's access?**
 

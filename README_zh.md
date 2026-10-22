@@ -37,13 +37,13 @@
 
 ## 这是什么
 
-MCP 桥本身是上游开源项目 [DevSpace](https://github.com/Waishnav/devspace)，通过 npm 安装，包名为 `@waishnav/devspace`，由它提供 MCP server、OAuth、文件工具和 `run_shell`。本仓库不 fork、不打补丁，也不在它外面再套一层 server。
+MCP 桥本身是上游开源项目 [DevSpace](https://github.com/Waishnav/devspace)，通过 npm 安装，包名为 `@waishnav/devspace`，由它提供 MCP server、OAuth、文件工具和命令工具。本仓库不 fork、不打补丁，也不在它外面再套一层 server。
 
 本仓库提供 Codex 与 ChatGPT 协作所需的完整指引和控制：**一个统一 skill 入口**、**运行在桥进程之外的控制脚本**，以及适用于无需本地访问任务的可选、单轮浏览器交接。
 
 | 层 | 归属 | 负责什么 |
 |---|---|---|
-| MCP 桥 | DevSpace（上游） | MCP server、OAuth、文件工具、`run_shell` |
+| MCP 桥 | DevSpace（上游） | MCP server、OAuth、文件工具、命令工具 |
 | Skill | 本仓库 — `SKILL.md` | `L0_NO_TOOL` 浏览器任务包、`L1`–`L5` DevSpace 桥接路由、任务包与 manifest、Consent、收据和审批环节 |
 | 控制层 | 本仓库 — `scripts/bridge_controller.ps1` | 把 `On` / `Off` / `Reboot` 做成一个带互斥锁、带健康校验的期望状态事务 |
 | 外部恢复 | 本仓库 — `scripts/restart_task.ps1` | 按需的 Windows 计划任务，agent 已经够不到桥时也能把它重启起来 |
@@ -119,7 +119,7 @@ cd codex-chatgpt-bridge
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-如果目标位置已经有旧版 skill，安装器会先把它移动到带时间戳的备份目录，再复制新版。只有明确要丢弃旧安装时才使用 `-ForceOverwrite`。如需同时注册可选的按需 Reboot 计划任务，可加 `-RegisterRestartTask`；它不会创建自动触发器。
+如果目标位置已经有旧版 skill，安装器会先把它移动到 `%USERPROFILE%\.codex\skill-backups` 下带时间戳的备份目录，再复制新版。备份不会留在 Codex 的 Skill 自动发现目录中。只有明确要丢弃旧安装时才使用 `-ForceOverwrite`。如需同时注册可选的按需 Reboot 计划任务，可加 `-RegisterRestartTask`；它不会创建自动触发器。
 
 安装后 skill 会被复制到：
 
@@ -183,7 +183,7 @@ controller 会用 profile schema v2 保存该列表，并在后续 `On`、`Resta
 powershell -ExecutionPolicy Bypass -File "$skill\scripts\set_cf_api_config.ps1" -Action Set -AccountId <account-id> -KvNamespaceId <namespace-id>
 ```
 
-脚本会安全提示输入 token，并用 Windows DPAPI `CurrentUser` 加密保存在 `%LOCALAPPDATA%\devspace-bridge`，不会把 token 放进命令行或输出。保存前会验证一次 DPAPI 加密/解密闭环；成功迁移后会清除旧的明文 `cf-api.json`，controller 也会拒绝使用遗留明文凭据。DPAPI 只保护静态文件；同一 Windows 用户下运行的桥、controller 和 `run_shell` 仍共享该用户权限，所以它不是权限隔离边界。
+脚本会安全提示输入 token，并用 Windows DPAPI `CurrentUser` 加密保存在 `%LOCALAPPDATA%\devspace-bridge`，不会把 token 放进命令行或输出。保存前会验证一次 DPAPI 加密/解密闭环；成功迁移后会清除旧的明文 `cf-api.json`，controller 也会拒绝使用遗留明文凭据。DPAPI 只保护静态文件；同一 Windows 用户下运行的桥、controller 和命令工具仍共享该用户权限，所以它不是权限隔离边界。
 
 使用 `-InstallCloudflared` 自动下载时，脚本会先验证 Windows Authenticode 签名有效且签名方为 Cloudflare, Inc.，验证失败不会安装或运行该文件。
 
@@ -227,7 +227,7 @@ powershell -ExecutionPolicy Bypass -File "$skill\scripts\restart_task.ps1" -Acti
 powershell -ExecutionPolicy Bypass -File "$skill\scripts\local_bridge.ps1" -Action Rotate
 ```
 
-`Rotate` 是“一键改锁”：停桥（清内存 token）→ 删除 `oauth-state.json`（吊销已签发的 token）→ 生成新的 Owner password。之后用 controller `On`，再用新密码重新授权你自己的 ChatGPT。只要怀疑被未授权连接，执行该命令即可。
+`Rotate` 是“一键改锁”：停桥（清内存 token）→ 删除 DevSpace 配置状态目录里的 OAuth token → 生成新的 Owner password。若设置了 `DEVSPACE_OAUTH_OWNER_TOKEN` 环境变量，先移除覆盖值再运行；否则实际使用的密码不会变。之后用 controller `On`，再用新密码重新授权你自己的 ChatGPT。只要怀疑被未授权连接，执行该命令即可。
 
 ## 让 ChatGPT 不用每次重新设置
 
@@ -360,9 +360,9 @@ ChatGPT app URL        固定，只配一次
 
 ## 安全模型
 
-先明确真实的信任边界：一旦完成 ChatGPT app 的 OAuth 授权，桥就授予了对你机器的文件读写和 shell 执行。「这是一份 skill，不是一个沙箱」在这里是关键前提——`L0`–`L5` 只是 Codex 要求 ChatGPT 遵守的**策略**，并非桥强制执行；`run_shell` 不受 root 约束，所以被授权的 app 实际上等于本地用户级代码执行。真正被强制的边界只有三条，其中两条来自 DevSpace：OAuth 授权（一个强随机 Owner password）和文件工具的窄 `allowedRoots`；第三条是本仓库提供的——用 controller `Off` 切断访问途径。这也是为什么「`Off` 足够顺手」比那张等级表更重要。
+先明确真实的信任边界：一旦完成 ChatGPT app 的 OAuth 授权，桥就授予了对你机器的文件读写和命令执行。「这是一份 skill，不是一个沙箱」在这里是关键前提——`L0`–`L5` 只是 Codex 要求 ChatGPT 遵守的**策略**，并非桥强制执行。DevSpace 1.0 的 `minimal`/`full`/`codex` 和 v1.1 的 `codex`/`claude` 模式都包含写入与命令执行；命令工具不受 `allowedRoots` 约束，所以被授权的 app 实际上等于本地用户级代码执行。真正被强制的边界只有三条，其中两条来自 DevSpace：OAuth 授权（一个强随机 Owner password）和文件工具的窄 `allowedRoots`；第三条是本仓库提供的——用 controller `Off` 切断访问途径。这也是为什么「`Off` 足够顺手」比那张等级表更重要。
 
-不要为 DevSpace 开启常驻或按等级自动批准。每次本地桥任务开始前，都要由用户明确授权具体根目录和操作范围；之后逐项检查请求是否仍在该范围内。`L1`–`L3` 只是描述期望行为，不会让 OAuth 客户端变成只读，也不会限制 shell。`L0_NO_TOOL` 不需要本地桥审批；自动浏览器交接仍需单独的当前 Consent。
+不要启用跨任务的常驻自动批准。每个本地桥任务只需一次明确授权，写清根目录、操作类别、排除项和停止条件；当前用户指令如果明确写出目标和操作，本身就构成本任务授权，包括具体的高影响操作。获批后，同一范围内的读、搜索、诊断和授权写入连续执行，不再逐条打断用户。只有范围、数据暴露或风险需要扩大，或授权含糊时才暂停确认。任务结束即失效。这个 Skill 不能更改 Codex 宿主级的批准设置，也不能绕过平台提示。`L1`–`L3` 只是描述期望行为，不会让 OAuth 客户端变成只读，也不会限制命令执行。`L0_NO_TOOL` 不需要本地桥授权；自动浏览器交接仍需单独的当前 Consent。
 
 实操建议：
 
@@ -371,7 +371,8 @@ ChatGPT app URL        固定，只配一次
 - 查看 controller `Doctor.securityWarnings`；磁盘根目录、完整用户目录及其父目录会被标记为范围过宽。
 - 一旦怀疑别人连上，跑 `-Action Rotate` 吊销所有 token 并改锁。
 - controller 状态和日志包含路径、PID 与 tunnel URL，分享前先脱敏。
-- shell 命令日志默认关闭，避免无意持久化敏感参数；确实需要审计轨迹时，再设置用户级环境变量 `DEVSPACE_LOG_SHELL_COMMANDS=true`。
+- shell 命令日志默认关闭，避免无意持久化敏感参数；DevSpace 1.0 使用 `DEVSPACE_LOG_SHELL_COMMANDS`，v1.1 使用 `config.jsonc` 的 `logging.shellCommands`，控制器会迁移该设置。确实需要审计轨迹时再打开。
+- 如果设置了 `DEVSPACE_OAUTH_OWNER_TOKEN` 环境变量，`Rotate` 会先停止并要求移除覆盖值，避免只换 `auth.json` 却没有更换实际 Owner 密码。
 
 ## 面向 Agent 用户
 

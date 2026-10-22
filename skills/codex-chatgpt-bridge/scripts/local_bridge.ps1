@@ -42,6 +42,10 @@ $CfApiProtectedConfigPath = Join-Path $StateDir "cf-api.protected.json"
 $CloudflaredPath = Join-Path $BinDir "cloudflared.exe"
 $NpmBin = Join-Path $env:APPDATA "npm"
 $DevspaceCmd = Join-Path $NpmBin "devspace.cmd"
+$script:DevspaceVersion = $null
+$script:DevspaceConfigFormat = $null
+$script:LegacyToolMode = "minimal"
+$script:LegacyLogShellCommands = "false"
 $GitBashDir = "C:\Program Files\Git\bin"
 $RunId = if ($OperationId) {
   [regex]::Replace($OperationId, "[^A-Za-z0-9_.-]", "_")
@@ -81,6 +85,199 @@ function Write-JsonFileAtomic($obj, [string]$path) {
       Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
     }
   }
+}
+
+function Remove-JsonComments([string]$text) {
+  $builder = New-Object System.Text.StringBuilder
+  $inString = $false
+  $escaped = $false
+  $lineComment = $false
+  $blockComment = $false
+  for ($i = 0; $i -lt $text.Length; $i++) {
+    $char = $text[$i]
+    if ($lineComment) {
+      if ($char -eq "`r" -or $char -eq "`n") {
+        $null = $builder.Append($char)
+        $lineComment = $false
+      } else {
+        $null = $builder.Append(' ')
+      }
+      continue
+    }
+    if ($blockComment) {
+      if ($char -eq '*' -and $i + 1 -lt $text.Length -and $text[$i + 1] -eq '/') {
+        $null = $builder.Append('  ')
+        $i++
+        $blockComment = $false
+      } elseif ($char -eq "`r" -or $char -eq "`n") {
+        $null = $builder.Append($char)
+      } else {
+        $null = $builder.Append(' ')
+      }
+      continue
+    }
+    if ($inString) {
+      $null = $builder.Append($char)
+      if ($escaped) {
+        $escaped = $false
+      } elseif ($char -eq '\') {
+        $escaped = $true
+      } elseif ($char -eq '"') {
+        $inString = $false
+      }
+      continue
+    }
+    if ($char -eq '"') {
+      $inString = $true
+      $null = $builder.Append($char)
+    } elseif ($char -eq '/' -and $i + 1 -lt $text.Length -and $text[$i + 1] -eq '/') {
+      $null = $builder.Append('  ')
+      $i++
+      $lineComment = $true
+    } elseif ($char -eq '/' -and $i + 1 -lt $text.Length -and $text[$i + 1] -eq '*') {
+      $null = $builder.Append('  ')
+      $i++
+      $blockComment = $true
+    } else {
+      $null = $builder.Append($char)
+    }
+  }
+  if ($blockComment) { throw "DevSpace JSONC has an unterminated block comment." }
+  return $builder.ToString()
+}
+
+function ConvertFrom-JsoncText([string]$text) {
+  $withoutComments = Remove-JsonComments $text
+  $builder = New-Object System.Text.StringBuilder
+  $inString = $false
+  $escaped = $false
+  for ($i = 0; $i -lt $withoutComments.Length; $i++) {
+    $char = $withoutComments[$i]
+    if ($inString) {
+      $null = $builder.Append($char)
+      if ($escaped) {
+        $escaped = $false
+      } elseif ($char -eq '\') {
+        $escaped = $true
+      } elseif ($char -eq '"') {
+        $inString = $false
+      }
+      continue
+    }
+    if ($char -eq '"') {
+      $inString = $true
+      $null = $builder.Append($char)
+    } elseif ($char -eq ',') {
+      $next = $i + 1
+      while ($next -lt $withoutComments.Length -and [char]::IsWhiteSpace($withoutComments[$next])) { $next++ }
+      if ($next -lt $withoutComments.Length -and $withoutComments[$next] -in @('}', ']')) {
+        $null = $builder.Append(' ')
+      } else {
+        $null = $builder.Append($char)
+      }
+    } else {
+      $null = $builder.Append($char)
+    }
+  }
+  return ($builder.ToString() | ConvertFrom-Json -ErrorAction Stop)
+}
+
+function Read-JsoncFile([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  return ConvertFrom-JsoncText ([System.IO.File]::ReadAllText($path))
+}
+
+function Get-JsonProperty($object, [string]$name) {
+  if ($null -eq $object) { return $null }
+  $property = $object.PSObject.Properties[$name]
+  if ($property) { return $property.Value }
+  return $null
+}
+
+function Set-JsonProperty($object, [string]$name, $value) {
+  $property = $object.PSObject.Properties[$name]
+  if ($property) {
+    $property.Value = $value
+  } else {
+    $object | Add-Member -MemberType NoteProperty -Name $name -Value $value
+  }
+}
+
+function Get-OrAdd-JsonObject($object, [string]$name) {
+  $value = Get-JsonProperty $object $name
+  if ($null -eq $value -or $value -isnot [System.Management.Automation.PSCustomObject]) {
+    $value = [pscustomobject]@{}
+    Set-JsonProperty $object $name $value
+  }
+  return $value
+}
+
+function ConvertFrom-LegacyDevspaceConfig($legacy) {
+  $config = [pscustomobject]@{
+    configVersion = 1
+    server = [pscustomobject]@{}
+    workspaces = [pscustomobject]@{}
+    storage = [pscustomobject]@{}
+    tools = [pscustomobject]@{}
+    ui = [pscustomobject]@{}
+    logging = [pscustomobject]@{}
+    artifacts = [pscustomobject]@{}
+    skills = [pscustomobject]@{}
+    subagents = [pscustomobject]@{}
+    oauth = [pscustomobject]@{}
+  }
+  $mapping = @{
+    host = @('server', 'host'); port = @('server', 'port')
+    publicBaseUrl = @('server', 'publicBaseUrl'); allowedHosts = @('server', 'allowedHosts')
+    trustProxy = @('server', 'trustProxy'); allowedRoots = @('workspaces', 'allowedRoots')
+    worktreeRoot = @('workspaces', 'worktreeRoot'); stateDir = @('storage', 'stateDir')
+    artifactsEnabled = @('artifacts', 'enabled'); artifactMaxFileBytes = @('artifacts', 'maxFileBytes')
+    agentDir = @('skills', 'agentDir')
+  }
+  foreach ($legacyName in $mapping.Keys) {
+    $value = Get-JsonProperty $legacy $legacyName
+    if ($null -ne $value) {
+      $target = Get-OrAdd-JsonObject $config $mapping[$legacyName][0]
+      Set-JsonProperty $target $mapping[$legacyName][1] $value
+    }
+  }
+  foreach ($section in @('tools', 'ui', 'logging', 'artifacts', 'skills', 'subagents', 'oauth')) {
+    $value = Get-JsonProperty $legacy $section
+    if ($null -ne $value) { Set-JsonProperty $config $section $value }
+  }
+  return $config
+}
+
+function Resolve-DevspaceConfigDirectory {
+  $path = [Environment]::GetEnvironmentVariable("DEVSPACE_CONFIG_DIR", "User")
+  if (-not $path) { $path = $env:DEVSPACE_CONFIG_DIR }
+  if (-not $path) { $path = Join-Path $HOME ".devspace" }
+  $path = [Environment]::ExpandEnvironmentVariables($path.Trim())
+  if ($path -eq "~") {
+    $path = $HOME
+  } elseif ($path.StartsWith("~\") -or $path.StartsWith("~/")) {
+    $path = Join-Path $HOME $path.Substring(2)
+  } elseif (-not [System.IO.Path]::IsPathRooted($path)) {
+    $path = Join-Path (Get-Location).Path $path
+  }
+  return [System.IO.Path]::GetFullPath($path)
+}
+
+function Resolve-DevspaceStateDirectory($config, [string]$configDir) {
+  $storage = Get-JsonProperty $config "storage"
+  $path = [string](Get-JsonProperty $storage "stateDir")
+  if (-not $path) { $path = [Environment]::GetEnvironmentVariable("DEVSPACE_STATE_DIR", "User") }
+  if (-not $path) { $path = $env:DEVSPACE_STATE_DIR }
+  if (-not $path) { $path = Join-Path $HOME ".local\share\devspace" }
+  $path = [Environment]::ExpandEnvironmentVariables($path.Trim())
+  if ($path -eq "~") {
+    $path = $HOME
+  } elseif ($path.StartsWith("~\") -or $path.StartsWith("~/")) {
+    $path = Join-Path $HOME $path.Substring(2)
+  } elseif (-not [System.IO.Path]::IsPathRooted($path)) {
+    $path = Join-Path $configDir $path
+  }
+  return [System.IO.Path]::GetFullPath($path)
 }
 
 function Get-CommandLineProcess([string]$pattern) {
@@ -232,8 +429,34 @@ function Set-BridgePath {
 
 function Ensure-Devspace {
   Set-BridgePath
+  $env:DEVSPACE_CONFIG_DIR = Resolve-DevspaceConfigDirectory
   if (-not (Test-Path $DevspaceCmd)) {
     throw "DevSpace CLI not found at $DevspaceCmd. Install with: npm install -g @waishnav/devspace"
+  }
+  if (-not $script:DevspaceVersion) {
+    $versionOutput = @(& $DevspaceCmd --version 2>&1)
+    $versionText = $versionOutput -join " "
+    $versionMatch = [regex]::Match($versionText, "(?<!\d)(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?")
+    if ($LASTEXITCODE -ne 0 -or -not $versionMatch.Success) {
+      $packagePath = Join-Path $NpmBin "node_modules\@waishnav\devspace\package.json"
+      if (Test-Path -LiteralPath $packagePath) {
+        try {
+          $package = [System.IO.File]::ReadAllText($packagePath) | ConvertFrom-Json -ErrorAction Stop
+          $versionText = [string]$package.version
+          $versionMatch = [regex]::Match($versionText, "^(\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$")
+        } catch {
+          $versionMatch = [regex]::Match("", "^$")
+        }
+      }
+    }
+    if (-not $versionMatch.Success) {
+      throw "Could not determine the installed DevSpace version. Run 'devspace --version' and upgrade to 1.0.0 or newer."
+    }
+    $script:DevspaceVersion = [version]$versionMatch.Groups[1].Value
+    $script:DevspaceConfigFormat = if ($script:DevspaceVersion -ge [version]"1.1.0") { "jsonc" } else { "legacy" }
+    if ($script:DevspaceVersion -lt [version]"1.0.0") {
+      throw "DevSpace $($script:DevspaceVersion) is too old for this bridge. Upgrade to 1.0.0 or newer."
+    }
   }
 }
 
@@ -308,23 +531,146 @@ function Resolve-AllowedRoots([string]$projectRoot, [string]$encodedRoots) {
 }
 
 function Ensure-DevspaceConfig([string[]]$roots, [string]$publicBaseUrl, [string[]]$allowedHosts) {
-  $configDir = Join-Path $HOME ".devspace"
-  $configPath = Join-Path $configDir "config.json"
+  $configDir = Resolve-DevspaceConfigDirectory
+  $configPath = Join-Path $configDir $(if ($script:DevspaceConfigFormat -eq "jsonc") { "config.jsonc" } else { "config.json" })
+  $legacyConfigPath = Join-Path $configDir "config.json"
   $authPath = Join-Path $configDir "auth.json"
   New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
-  $config = [ordered]@{
-    host = "127.0.0.1"
-    port = $Port
-    allowedRoots = @($roots)
-    publicBaseUrl = $publicBaseUrl
+  $requestedMode = [Environment]::GetEnvironmentVariable("DEVSPACE_TOOL_MODE", "User")
+  if (-not $requestedMode) { $requestedMode = $env:DEVSPACE_TOOL_MODE }
+  if (-not $requestedMode) {
+    $minimalTools = [Environment]::GetEnvironmentVariable("DEVSPACE_MINIMAL_TOOLS", "User")
+    if (-not $minimalTools) { $minimalTools = $env:DEVSPACE_MINIMAL_TOOLS }
+    if ($minimalTools) {
+      $minimalTools = $minimalTools.Trim().ToLowerInvariant()
+      if ($minimalTools -in @("1", "true", "yes", "on")) { $requestedMode = "minimal" }
+      elseif ($minimalTools -in @("0", "false", "no", "off")) { $requestedMode = "full" }
+      else { throw "DEVSPACE_MINIMAL_TOOLS must be a boolean value." }
+    }
   }
-  if ($allowedHosts -and $allowedHosts.Count -gt 0) {
-    $config.allowedHosts = @($allowedHosts | Where-Object { $_ } | Select-Object -Unique)
+  if ($requestedMode) {
+    $requestedMode = $requestedMode.Trim().ToLowerInvariant()
+    if ($requestedMode -notin @("minimal", "full", "codex", "claude")) {
+      throw "DEVSPACE_TOOL_MODE='$requestedMode' is unsupported. Use minimal/full/codex with DevSpace 1.0, or codex/claude with DevSpace 1.1+."
+    }
   }
+  $legacyMode = if (-not $requestedMode) { "minimal" } elseif ($requestedMode -eq "claude") { "minimal" } else { $requestedMode }
+  $modernMode = if (-not $requestedMode) { "codex" } elseif ($requestedMode -in @("minimal", "full")) { "claude" } else { $requestedMode }
+
+  $logSetting = [Environment]::GetEnvironmentVariable("DEVSPACE_LOG_SHELL_COMMANDS", "User")
+  if (-not $logSetting) { $logSetting = $env:DEVSPACE_LOG_SHELL_COMMANDS }
+  $parsedLogSetting = $false
+  if ($logSetting) {
+    $normalizedLogSetting = $logSetting.Trim().ToLowerInvariant()
+    if ($normalizedLogSetting -notin @("1", "true", "yes", "on", "0", "false", "no", "off")) {
+      throw "DEVSPACE_LOG_SHELL_COMMANDS must be a boolean value."
+    }
+    $parsedLogSetting = $normalizedLogSetting -in @("1", "true", "yes", "on")
+  }
+  $script:LegacyToolMode = $legacyMode
+  $script:LegacyLogShellCommands = ([string]$parsedLogSetting).ToLowerInvariant()
+
+  if ($script:DevspaceConfigFormat -eq "legacy") {
+    $legacyStateDir = [Environment]::GetEnvironmentVariable("DEVSPACE_STATE_DIR", "User")
+    if (-not $legacyStateDir) { $legacyStateDir = $env:DEVSPACE_STATE_DIR }
+    if (-not $legacyStateDir) { $legacyStateDir = Join-Path $HOME ".local\share\devspace" }
+    $legacyStateDir = Resolve-DevspaceStateDirectory `
+      ([pscustomobject]@{ storage = [pscustomobject]@{ stateDir = $legacyStateDir } }) `
+      $configDir
+    $legacyConfig = [ordered]@{
+      host = "127.0.0.1"
+      port = $Port
+      allowedRoots = @($roots)
+      publicBaseUrl = $publicBaseUrl
+      stateDir = $legacyStateDir
+    }
+    $hosts = @($allowedHosts | Where-Object { $_ } | Select-Object -Unique)
+    if ($hosts.Count -gt 0) { $legacyConfig.allowedHosts = $hosts }
+    Write-JsonFileAtomic $legacyConfig $configPath
+    New-Item -ItemType Directory -Force -Path $legacyStateDir | Out-Null
+    if (-not (Test-Path $authPath)) {
+      $ownerTokenOverride = [Environment]::GetEnvironmentVariable("DEVSPACE_OAUTH_OWNER_TOKEN", "User")
+      if (-not $ownerTokenOverride) { $ownerTokenOverride = $env:DEVSPACE_OAUTH_OWNER_TOKEN }
+      if (-not $ownerTokenOverride) {
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        try {
+          $bytes = New-Object byte[] 32
+          $rng.GetBytes($bytes)
+          $token = [Convert]::ToBase64String($bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+          Write-JsonFileAtomic ([ordered]@{ ownerToken = $token }) $authPath
+        } finally {
+          $rng.Dispose()
+        }
+      }
+    }
+    return
+  }
+
+  if (Test-Path -LiteralPath $configPath) {
+    $config = Read-JsoncFile $configPath
+    if ($config -isnot [System.Management.Automation.PSCustomObject]) {
+      throw "DevSpace config must contain a JSON object: $configPath"
+    }
+    if (-not (Get-JsonProperty $config "server")) {
+      $config = ConvertFrom-LegacyDevspaceConfig $config
+    }
+  } elseif (Test-Path -LiteralPath $legacyConfigPath) {
+    $legacy = ConvertFrom-JsoncText ([System.IO.File]::ReadAllText($legacyConfigPath))
+    if ($legacy -isnot [System.Management.Automation.PSCustomObject]) {
+      throw "Legacy DevSpace config must contain a JSON object: $legacyConfigPath"
+    }
+    $config = ConvertFrom-LegacyDevspaceConfig $legacy
+  } else {
+    $config = [pscustomobject]@{ configVersion = 1 }
+  }
+
+  Set-JsonProperty $config "configVersion" 1
+  $server = Get-OrAdd-JsonObject $config "server"
+  Set-JsonProperty $server "host" "127.0.0.1"
+  Set-JsonProperty $server "port" $Port
+  Set-JsonProperty $server "publicBaseUrl" $publicBaseUrl
+  Set-JsonProperty $server "allowedHosts" @($allowedHosts | Where-Object { $_ } | Select-Object -Unique)
+  Set-JsonProperty $server "trustProxy" $false
+
+  $workspaces = Get-OrAdd-JsonObject $config "workspaces"
+  Set-JsonProperty $workspaces "allowedRoots" @($roots)
+
+  $storage = Get-OrAdd-JsonObject $config "storage"
+  if (-not (Get-JsonProperty $storage "stateDir")) {
+    $stateDir = [Environment]::GetEnvironmentVariable("DEVSPACE_STATE_DIR", "User")
+    if (-not $stateDir) { $stateDir = $env:DEVSPACE_STATE_DIR }
+    if (-not $stateDir) { $stateDir = Join-Path $HOME ".local\share\devspace" }
+    Set-JsonProperty $storage "stateDir" $stateDir
+  }
+  $resolvedStateDir = Resolve-DevspaceStateDirectory $config $configDir
+  Set-JsonProperty $storage "stateDir" $resolvedStateDir
+  New-Item -ItemType Directory -Force -Path $resolvedStateDir | Out-Null
+
+  $tools = Get-OrAdd-JsonObject $config "tools"
+  $configuredMode = [string](Get-JsonProperty $tools "mode")
+  if ($requestedMode) { $configuredMode = $modernMode }
+  if (-not $configuredMode) { $configuredMode = "codex" }
+  $configuredMode = $configuredMode.Trim().ToLowerInvariant()
+  if ($configuredMode -in @("minimal", "full")) { $configuredMode = "claude" }
+  if ($configuredMode -notin @("codex", "claude")) {
+    throw "DevSpace tools.mode '$configuredMode' is unsupported. Choose 'codex' or 'claude'; both expose command execution."
+  }
+  Set-JsonProperty $tools "mode" $configuredMode
+
+  $logging = Get-OrAdd-JsonObject $config "logging"
+  if ($logSetting) {
+    Set-JsonProperty $logging "shellCommands" $parsedLogSetting
+  } elseif ($null -eq (Get-JsonProperty $logging "shellCommands")) {
+    Set-JsonProperty $logging "shellCommands" $false
+  }
+
   Write-JsonFileAtomic $config $configPath
 
   if (-not (Test-Path $authPath)) {
+    $ownerTokenOverride = [Environment]::GetEnvironmentVariable("DEVSPACE_OAUTH_OWNER_TOKEN", "User")
+    if (-not $ownerTokenOverride) { $ownerTokenOverride = $env:DEVSPACE_OAUTH_OWNER_TOKEN }
+    if (-not $ownerTokenOverride) {
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
       $bytes = New-Object byte[] 32
@@ -333,6 +679,7 @@ function Ensure-DevspaceConfig([string[]]$roots, [string]$publicBaseUrl, [string
       Write-JsonFileAtomic ([ordered]@{ ownerToken = $token }) $authPath
     } finally {
       $rng.Dispose()
+    }
     }
   }
 }
@@ -379,22 +726,28 @@ function Start-Devspace([string]$root, [string]$publicBaseUrl) {
   $errPath = Join-Path $LogDir "devspace-$RunId.err.log"
 
   $quote = { param([string]$value) "'" + $value.Replace("'", "''") + "'" }
-  # Prefer User-level DEVSPACE_TOOL_MODE so mode survives bridge Restart.
-  $toolMode = [Environment]::GetEnvironmentVariable("DEVSPACE_TOOL_MODE", "User")
-  if (-not $toolMode) { $toolMode = $env:DEVSPACE_TOOL_MODE }
-  $toolModeLine = if ($toolMode) {
-    "`$env:DEVSPACE_TOOL_MODE = $(& $quote $toolMode)"
+  $configDir = Resolve-DevspaceConfigDirectory
+  $clearConfigEnvironment = @(
+    "HOST", "PORT", "DEVSPACE_ALLOWED_ROOTS", "DEVSPACE_PUBLIC_BASE_URL", "DEVSPACE_ALLOWED_HOSTS",
+    "DEVSPACE_WORKTREE_ROOT", "DEVSPACE_STATE_DIR", "DEVSPACE_TOOL_MODE", "DEVSPACE_MINIMAL_TOOLS",
+    "DEVSPACE_WIDGETS", "DEVSPACE_ARTIFACTS", "DEVSPACE_ARTIFACT_MAX_FILE_BYTES", "DEVSPACE_SKILLS",
+    "DEVSPACE_SKILL_PATHS", "DEVSPACE_AGENT_DIR", "DEVSPACE_SUBAGENTS", "DEVSPACE_LOG_LEVEL",
+    "DEVSPACE_LOG_FORMAT", "DEVSPACE_LOG_REQUESTS", "DEVSPACE_LOG_ASSETS", "DEVSPACE_LOG_TOOL_CALLS",
+    "DEVSPACE_LOG_SHELL_COMMANDS", "DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS",
+    "DEVSPACE_OAUTH_REFRESH_TOKEN_TTL_SECONDS", "DEVSPACE_OAUTH_SCOPES",
+    "DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS", "DEVSPACE_TRUST_PROXY"
+  )
+  $clearConfigEnvironmentLine = "`$configVariables = @(" + (($clearConfigEnvironment | ForEach-Object { "'$_'" }) -join ",") + "); foreach (`$name in `$configVariables) { Remove-Item -LiteralPath (`"Env:\`" + `$name) -ErrorAction SilentlyContinue }"
+  $legacyEnvironmentLines = if ($script:DevspaceConfigFormat -eq "legacy") {
+    "`$env:DEVSPACE_TOOL_MODE = $(& $quote $script:LegacyToolMode)`n`$env:DEVSPACE_LOG_SHELL_COMMANDS = $(& $quote $script:LegacyLogShellCommands)"
   } else {
     ""
   }
-  $logShellCommands = [Environment]::GetEnvironmentVariable("DEVSPACE_LOG_SHELL_COMMANDS", "User")
-  if (-not $logShellCommands) { $logShellCommands = $env:DEVSPACE_LOG_SHELL_COMMANDS }
-  if (-not $logShellCommands) { $logShellCommands = "false" }
   $childScript = @"
 `$env:PATH = $(& $quote "$NpmBin;$GitBashDir;") + `$env:PATH
-`$env:DEVSPACE_PUBLIC_BASE_URL = $(& $quote $publicBaseUrl)
-`$env:DEVSPACE_LOG_SHELL_COMMANDS = $(& $quote $logShellCommands)
-$toolModeLine
+$clearConfigEnvironmentLine
+`$env:DEVSPACE_CONFIG_DIR = $(& $quote $configDir)
+$legacyEnvironmentLines
 Set-Location -LiteralPath $(& $quote $root)
 & $(& $quote $DevspaceCmd) serve > $(& $quote $outPath) 2> $(& $quote $errPath)
 "@
@@ -608,6 +961,11 @@ switch ($Action) {
   }
   "Rotate" {
     # Panic button / re-key: lock out everyone who is or was connected.
+    $ownerTokenOverride = [Environment]::GetEnvironmentVariable("DEVSPACE_OAUTH_OWNER_TOKEN", "User")
+    if (-not $ownerTokenOverride) { $ownerTokenOverride = $env:DEVSPACE_OAUTH_OWNER_TOKEN }
+    if ($ownerTokenOverride) {
+      throw "Rotate cannot replace an active DEVSPACE_OAUTH_OWNER_TOKEN override. Remove that override first, then run Rotate again; no bridge state was changed."
+    }
     # 1) Stop the bridge so the devspace process drops all in-memory OAuth tokens.
     $previousDiscoverOrphans = $DiscoverOrphans
     $DiscoverOrphans = $true
@@ -621,15 +979,30 @@ switch ($Action) {
       throw "Rotate could not prove that every bridge and tunnel process stopped. OAuth material was not changed."
     }
     # 2) Delete persisted tokens so previously issued bearer/refresh tokens die.
-    $devspaceStateDir = Join-Path $HOME ".devspace"
-    $oauthStatePath = Join-Path $devspaceStateDir "oauth-state.json"
-    $clearedPersistedTokens = Test-Path $oauthStatePath
-    if ($clearedPersistedTokens) {
-      Remove-Item -LiteralPath $oauthStatePath -Force
+    $devspaceConfigDir = Resolve-DevspaceConfigDirectory
+    $configPath = Join-Path $devspaceConfigDir "config.jsonc"
+    $devspaceConfig = Read-JsoncFile $configPath
+    if (-not $devspaceConfig) {
+      $legacyConfigPath = Join-Path $devspaceConfigDir "config.json"
+      if (Test-Path -LiteralPath $legacyConfigPath) {
+        $devspaceConfig = ConvertFrom-LegacyDevspaceConfig (ConvertFrom-JsoncText ([System.IO.File]::ReadAllText($legacyConfigPath)))
+      }
+    }
+    $devspaceStateDir = Resolve-DevspaceStateDirectory $devspaceConfig $devspaceConfigDir
+    $oauthStatePaths = @(
+      (Join-Path $devspaceStateDir "oauth-state.json"),
+      (Join-Path $devspaceConfigDir "oauth-state.json")
+    ) | Select-Object -Unique
+    $clearedPersistedTokens = $false
+    foreach ($oauthStatePath in $oauthStatePaths) {
+      if (Test-Path -LiteralPath $oauthStatePath) {
+        Remove-Item -LiteralPath $oauthStatePath -Force
+        $clearedPersistedTokens = $true
+      }
     }
     # 3) Mint a fresh 256-bit Owner password so the old one no longer authorizes.
-    New-Item -ItemType Directory -Force -Path $devspaceStateDir | Out-Null
-    $authPath = Join-Path $devspaceStateDir "auth.json"
+    New-Item -ItemType Directory -Force -Path $devspaceConfigDir, $devspaceStateDir | Out-Null
+    $authPath = Join-Path $devspaceConfigDir "auth.json"
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
       $bytes = New-Object byte[] 32
