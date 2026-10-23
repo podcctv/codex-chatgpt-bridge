@@ -9,26 +9,30 @@ Automatic preflight returns exactly one status:
 - `NEEDS_DESKTOP_APP`: the runtime explicitly identifies CLI, IDE, cloud, Linux, or another unsupported surface.
 - `NEEDS_BROWSER`: a supported Mac or Windows desktop surface lacks the required Browser Skill or capability.
 - `NEEDS_CHATGPT_LOGIN`: the ChatGPT page visibly shows a logged-out state.
-- `NEEDS_MODEL_SELECTION`: the requested model is not visibly selected or available.
+- `NEEDS_MODEL_SELECTION`: the requested model is not visibly selected, or its selected state cannot be determined.
+- `NEEDS_MODEL_AVAILABILITY`: the requested model is visibly selected, but the UI marks it locked, unavailable, or blocked by a usage limit/cooldown.
 - `NEEDS_SITE_PERMISSION`: browser access to ChatGPT is blocked pending user action.
 - `NEEDS_AUTOMATION_CONSENT`: risk acknowledgement is missing, stale, or unavailable.
 - `AUTOMATION_DISABLED`: the user revoked risk acknowledgement.
-- `READY`: the current user task requests a handoff, risk acknowledgement and transport capability are available, authentication and requested model and effort are visibly verified, and there are no blockers.
+- `READY`: the current user task requests a handoff, risk acknowledgement and transport capability are available, authentication and requested model and effort are visibly verified, the requested model is currently usable, and there are no blockers.
 
 When human takeover is needed, keep the original repository task and current Packet draft local. Ask the user to finish the visible login, model, or permission step without sending credentials in chat. On their next message, recheck only the volatile browser state and continue the original task.
 
 ### Verify model and reasoning effort independently
 
-For the default, use the visible controls in this order: set or verify reasoning effort **High**, then select and verify **GPT-6**. Read [model-selection.md](model-selection.md) for the exact click and verification sequence. If the user specifies a different model or effort for this task, use those exact values instead.
+For the default, use the visible controls in this order: set or verify reasoning effort **High**, then select and verify **GPT-6**. Read [model-selection.md](model-selection.md) for the exact click and verification sequence. In the current composer layout the first model-control click can open a popover that only contains the High slider; click the visible `High ›` label in that popover to expand the actual model list. If the user specifies a different model or effort for this task, use those exact values instead.
 
 - Do not identify a control from its accessibility description alone. Use the latest accessibility tree for navigation, and compare its label and result with the rendered UI whenever the label is generic, conflicts with the screenshot, or its menu looks unrelated.
 - A control visibly labeled `思考强度` / "Thinking effort" whose menu shows `High` and an effort slider is an effort control only. It is not evidence of the selected model, even if the accessibility tree calls it a model selector.
-- Model evidence must independently show the requested model name as selected (for example, `GPT-6`). Effort evidence must independently show the requested effort (for example, `High`). Do not combine one value into proof of the other.
-- If the menu does not expose model choices or a selected model name, or if rendered UI and accessibility labels disagree, classify the preflight as `NEEDS_MODEL_SELECTION`. Close an ambiguous menu with `Escape` if needed, then stop; do not keep clicking guessed controls, infer the model from account defaults, or send the packet.
+- Model evidence must independently show the requested model name as selected (for example, a rendered checkmark beside `GPT-6`, corroborated by the fresh accessibility tree's selected state such as `Value: 1`). Effort evidence must independently show the requested effort (for example, `High`). Do not combine one value into proof of the other.
+- A selected model and an available model are distinct facts. If the selected row is visibly locked, or a message reports a usage limit/cooldown, classify the preflight as `NEEDS_MODEL_AVAILABILITY`, even when the requested model is selected. Do not submit, retry, switch to a fallback, or treat the model as usable until the UI no longer shows the blocker.
+- If the expanded model menu does not expose model choices or a selected model name, or if rendered UI and accessibility labels disagree, classify the preflight as `NEEDS_MODEL_SELECTION`. Close an ambiguous menu with `Escape` if needed, then stop; do not keep clicking guessed controls, infer the model from account defaults, or send the packet.
 
-### Pause and resume on a model-selection blocker
+### Pause and resume on model blockers
 
 For `NEEDS_MODEL_SELECTION`, preserve the current Packet draft locally and tell the user exactly what was visible (including any label mismatch). Ask them to select the requested model in the same in-app Browser tab and reply when it is visibly selected. Do not ask for credentials, switch browsers, or submit anything while paused. On the next user message, recheck only the volatile login/model/effort/blocker state, using fresh UI observations and fresh control indices. Resume the original task only when all requested selections are visible and the other preflight gates pass; otherwise remain paused. A paused handoff is incomplete, not a completed failure, and must not be silently converted to another model.
+
+For `NEEDS_MODEL_AVAILABILITY`, preserve the current Packet draft locally and tell the user the model is selected but unavailable, quoting only the visible blocker (for example, locked / usage limit). Do not ask them to reselect a model that is already selected. Do not work around account limits or use another model without a new explicit user choice. On the next user message, recheck only the volatile login/model/effort/availability state in the same tab; resume only when the requested model is visibly usable or the user explicitly changes the requested model.
 
 For other takeover states (login or site permission), preserve the same Packet draft and use the same pause/resume behavior. Stop on CAPTCHA, rate-limit, unusual-activity, account restriction, or other states the user cannot safely clear through ordinary visible UI; do not work around them.
 
@@ -40,4 +44,4 @@ Wait for one completed answer, then identify the copy control in that assistant 
 
 Click the verified response-copy control once, then read the clipboard and validate the marked contract. If the clipboard is empty, the response is incomplete, or markers/headings are invalid, stop; do not extract response text from the DOM or retry automatically. If the user explicitly identifies a different visible control after a mis-targeted click, verify that corrected target and allow one corrected copy click; record both outcomes. Do not repeat after that correction.
 
-Stop on login, CAPTCHA, rate-limit, unusual-activity, account restriction, permission, ambiguous-control, or selector-drift states. Do not work around them. Never call private endpoints, replay network requests, inspect cookies, local storage, session storage, or hidden auth data, and never use background, scheduled, Dockerized, headless, parallel, proxy, stealth, CAPTCHA-solving, or anti-detection execution.
+Stop on login, CAPTCHA, rate-limit, model usage-limit/lock, unusual-activity, account restriction, permission, ambiguous-control, or selector-drift states. Do not work around them. Never call private endpoints, replay network requests, inspect cookies, local storage, session storage, or hidden auth data, and never use background, scheduled, Dockerized, headless, parallel, proxy, stealth, CAPTCHA-solving, or anti-detection execution.

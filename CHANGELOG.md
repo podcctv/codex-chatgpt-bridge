@@ -13,6 +13,7 @@ see the Security Model section in [README.md](README.md).
 - Unified the existing `codex-chatgpt-bridge` entrypoint with a consented, one-turn in-app Browser handoff for `L0_NO_TOOL` reasoning, including visible model checks, packet/result validation, and a redacted local completion receipt.
 - Added automation-consent state, a static Skill Doctor, and focused regression tests for the browser handoff contracts.
 - Added an explicit model-selection guide for setting High effort first, then opening the model menu from the displayed High control and selecting GPT-6.
+- Documented the current two-level High-to-model menu and fail-closed handling when GPT-6 is selected but visibly locked or usage-limited.
 - Documented the separate authorization boundaries for direct browser handoffs and OAuth-gated DevSpace access.
 - Added a single-source browser automation disclosure and a Doctor field that reports browser consent separately from package readiness.
 

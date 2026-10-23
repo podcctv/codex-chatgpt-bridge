@@ -27,6 +27,18 @@ const doctorPath = join(skillRoot, 'scripts', 'skill-doctor.mjs');
 const consentPath = join(skillRoot, 'scripts', 'automation-consent.mjs');
 const validatorPath = join(skillRoot, 'scripts', 'validate-handoff.mjs');
 
+test('model selection guide drills through the High submenu and fails closed on availability limits', async () => {
+  const selectionGuide = await readFile(join(skillRoot, 'references', 'model-selection.md'), 'utf8');
+  const transportGuide = await readFile(join(skillRoot, 'references', 'browser-transport.md'), 'utf8');
+  const doctorGuide = await readFile(join(skillRoot, 'references', 'skill-doctor.md'), 'utf8');
+  assert.match(selectionGuide, /visible `High ›` label/);
+  assert.match(selectionGuide, /GPT-6, Value: 1/);
+  assert.match(selectionGuide, /NEEDS_MODEL_AVAILABILITY/);
+  assert.match(selectionGuide, /Do not submit the packet, retry, work around the limit, or silently switch models/);
+  assert.match(transportGuide, /NEEDS_MODEL_AVAILABILITY/);
+  assert.match(doctorGuide, /NEEDS_MODEL_AVAILABILITY/);
+});
+
 test('default consent storage is scoped to the unified skill directory', () => {
   const path = defaultConsentPath({ CODEX_HOME: 'C:\\codex-home' });
   assert.ok(path.endsWith(join('codex-chatgpt-bridge', 'automation-consent.json')));
