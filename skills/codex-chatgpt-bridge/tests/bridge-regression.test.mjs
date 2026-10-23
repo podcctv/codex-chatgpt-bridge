@@ -289,24 +289,66 @@ test('complete receipt rejects a symlink that resolves outside its artifact root
 test('Doctor reports identical copies READY and names controlled-file drift', async (t) => {
   const copyRoot = join(await tempDirectory(t), 'skill-copy');
   await cp(skillRoot, copyRoot, { recursive: true });
-  const consentStateFile = join(copyRoot, 'missing-consent-state.json');
-  let report = await inspectInstallation(skillRoot, copyRoot, consentStateFile);
+  const consentStateFile = join(copyRoot, 'consent-state.json');
+  await writeConsentDecision(consentStateFile, true, undefined, join(skillRoot, 'references', 'automation-disclosure.md'));
+  let report = await inspectInstallation(skillRoot, copyRoot, {
+    browserCapability: 'cua-repl-iab',
+    consentStateFile,
+  });
   assert.equal(report.status, 'READY');
+  assert.equal(report.installation_status, 'READY');
   assert.equal(report.comparison.differences.length, 0);
-  assert.equal(report.browser_automation_consent.status, 'NEEDS_AUTOMATION_CONSENT');
+  assert.equal(report.browser_automation_consent.status, 'RISK_ACKNOWLEDGED');
+
+  report = await inspectInstallation(skillRoot, undefined, { consentStateFile });
+  assert.equal(report.status, 'NEEDS_BROWSER');
+  assert.equal(report.installation_status, 'READY');
 
   const disabledStateFile = join(copyRoot, 'disabled-consent-state.json');
   await writeConsentDecision(disabledStateFile, false);
-  report = await inspectInstallation(skillRoot, undefined, disabledStateFile);
-  assert.equal(report.status, 'READY');
+  report = await inspectInstallation(skillRoot, undefined, {
+    browserCapability: 'cua-repl-iab',
+    consentStateFile: disabledStateFile,
+  });
+  assert.equal(report.status, 'AUTOMATION_DISABLED');
   assert.equal(report.browser_automation_consent.status, 'AUTOMATION_DISABLED');
 
   const doctorGuide = join(copyRoot, 'references', 'skill-doctor.md');
   await writeFile(doctorGuide, `${await readFile(doctorGuide, 'utf8')}\nDrift fixture.\n`, 'utf8');
-  report = await inspectInstallation(skillRoot, copyRoot, consentStateFile);
+  report = await inspectInstallation(skillRoot, copyRoot, {
+    browserCapability: 'cua-repl-iab',
+    consentStateFile,
+  });
   const consistencyCheck = report.checks.find((check) => check.id === 'skill_copy_consistency');
   assert.equal(report.status, 'INVALID_INSTALLATION');
   assert.ok(consistencyCheck.differences.some((difference) => difference.path === 'references/skill-doctor.md'));
+});
+
+test('Doctor CLI requires runtime Browser evidence and risk acknowledgement for browser-route READY', async (t) => {
+  const root = await tempDirectory(t);
+  const consentStateFile = join(root, 'consent-state.json');
+  await writeConsentDecision(consentStateFile, true);
+
+  const missingCapability = spawnSync(process.execPath, [
+    doctorPath, '--json', '--consent-state-file', consentStateFile,
+  ], { encoding: 'utf8' });
+  assert.equal(missingCapability.status, 1);
+  const blocked = JSON.parse(missingCapability.stdout);
+  assert.equal(blocked.status, 'NEEDS_BROWSER');
+  assert.equal(blocked.installation_status, 'READY');
+
+  const ready = spawnSync(process.execPath, [
+    doctorPath,
+    '--json',
+    '--browser-capability', 'cua-repl-iab',
+    '--consent-state-file', consentStateFile,
+  ], { encoding: 'utf8' });
+  assert.equal(ready.status, 0, ready.stderr || ready.stdout);
+  const report = JSON.parse(ready.stdout);
+  assert.equal(report.status, 'READY');
+  assert.equal(report.browser_capability.transport, 'mcp__cua_repl (iab)');
+  assert.equal(report.browser_automation_consent.status, 'RISK_ACKNOWLEDGED');
+  assert.equal(report.browser_automation_consent.current_task_authorization_required, true);
 });
 
 test('Doctor rejects required paths that are directories and invalid option values', async (t) => {
@@ -325,6 +367,10 @@ test('Doctor rejects required paths that are directories and invalid option valu
   const duplicateOption = spawnSync(process.execPath, [doctorPath, '--json', '--json'], { encoding: 'utf8' });
   assert.equal(duplicateOption.status, 2);
   assert.match(duplicateOption.stderr, /duplicate argument: --json/);
+
+  const invalidBrowserCapability = spawnSync(process.execPath, [doctorPath, '--browser-capability', 'chrome', '--json'], { encoding: 'utf8' });
+  assert.equal(invalidBrowserCapability.status, 2);
+  assert.match(invalidBrowserCapability.stderr, /invalid value for --browser-capability/);
 });
 
 test('consent remains isolated to the test state file and requires the exact acknowledgement', async (t) => {
@@ -344,20 +390,15 @@ test('consent remains isolated to the test state file and requires the exact ack
     consentPath, 'enable', '--state-file', stateFile, '--acknowledge-risk', RISK_ACKNOWLEDGEMENT, '--json',
   ], { encoding: 'utf8' });
   assert.equal(enabled.status, 0);
-  assert.equal(JSON.parse(enabled.stdout).status, 'READY');
-  assert.equal((await consentStatus(stateFile)).browser_automation_enabled, true);
+  assert.equal(JSON.parse(enabled.stdout).status, 'RISK_ACKNOWLEDGED');
+  const acknowledged = await consentStatus(stateFile);
+  assert.equal(acknowledged.risk_acknowledged, true);
+  assert.equal(acknowledged.decision_scope, 'risk_acknowledgement_only');
+  assert.equal(acknowledged.current_task_authorization_required, true);
 
   const disabled = await writeConsentDecision(stateFile, false);
   assert.equal(disabled.status, 'AUTOMATION_DISABLED');
-  assert.equal(disabled.browser_automation_enabled, false);
-
-  await writeFile(stateFile, JSON.stringify({
-    schema_version: 1,
-    disclosure_version: 1,
-    browser_automation_enabled: false,
-    decided_at: new Date().toISOString(),
-  }), 'utf8');
-  assert.equal((await consentStatus(stateFile)).status, 'AUTOMATION_DISABLED');
+  assert.equal(disabled.risk_acknowledged, false);
 
   await writeFile(stateFile, JSON.stringify({
     schema_version: 1,
@@ -367,7 +408,7 @@ test('consent remains isolated to the test state file and requires the exact ack
   }), 'utf8');
   const legacyEnabled = await consentStatus(stateFile);
   assert.equal(legacyEnabled.status, 'NEEDS_AUTOMATION_CONSENT');
-  assert.equal(legacyEnabled.reason, 'stale_disclosure');
+  assert.equal(legacyEnabled.reason, 'legacy_state_not_migrated');
 });
 
 test('enabled consent is invalidated by any disclosure content change while disabled stays disabled', async (t) => {
@@ -378,11 +419,11 @@ test('enabled consent is invalidated by any disclosure content change while disa
   await writeFile(disclosureFile, 'Risk disclosure version one.\n', 'utf8');
 
   const enabled = await writeConsentDecision(stateFile, true, undefined, disclosureFile);
-  assert.equal(enabled.status, 'READY');
+  assert.equal(enabled.status, 'RISK_ACKNOWLEDGED');
   assert.match(JSON.parse(await readFile(stateFile, 'utf8')).disclosure_sha256, /^[a-f0-9]{64}$/);
 
   await writeFile(disclosureFile, 'Risk disclosure version one.\r\n', 'utf8');
-  assert.equal((await consentStatus(stateFile, disclosureFile)).status, 'READY');
+  assert.equal((await consentStatus(stateFile, disclosureFile)).status, 'RISK_ACKNOWLEDGED');
 
   await rm(disclosureFile);
   const unavailable = await consentStatus(stateFile, disclosureFile);

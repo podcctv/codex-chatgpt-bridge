@@ -7,8 +7,8 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const CONSENT_SCHEMA_VERSION = 1;
-export const RISK_ACKNOWLEDGEMENT = 'I_ACCEPT_EXPERIMENTAL_BROWSER_AUTOMATION_RISK_V1';
+export const CONSENT_SCHEMA_VERSION = 2;
+export const RISK_ACKNOWLEDGEMENT = 'I_ACKNOWLEDGE_EXPERIMENTAL_BROWSER_RISK_V2';
 
 const currentFile = fileURLToPath(import.meta.url);
 
@@ -43,8 +43,11 @@ export async function consentStatus(
     return statusResult(error?.code === 'ENOENT' ? 'missing_state' : 'invalid_state');
   }
 
+  if (Number.isInteger(state?.schema_version) && state.schema_version < CONSENT_SCHEMA_VERSION) {
+    return statusResult('legacy_state_not_migrated');
+  }
   if (!validStateShape(state)) return statusResult('invalid_state');
-  if (!state.browser_automation_enabled) {
+  if (!state.risk_acknowledged) {
     return statusResult('user_disabled', false, 'AUTOMATION_DISABLED');
   }
   let currentDisclosureDigest;
@@ -56,22 +59,22 @@ export async function consentStatus(
   if (state.disclosure_sha256 !== currentDisclosureDigest) {
     return statusResult('stale_disclosure');
   }
-  return statusResult(undefined, true, 'READY');
+  return statusResult(undefined, true, 'RISK_ACKNOWLEDGED');
 }
 
 export async function writeConsentDecision(
   stateFile,
-  browserAutomationEnabled,
+  riskAcknowledged,
   decidedAt = new Date().toISOString(),
   disclosureFile = defaultDisclosurePath(),
 ) {
   const target = resolve(stateFile);
-  const disclosureSha256 = browserAutomationEnabled
+  const disclosureSha256 = riskAcknowledged
     ? await disclosureDigest(disclosureFile)
     : null;
   const state = {
     schema_version: CONSENT_SCHEMA_VERSION,
-    browser_automation_enabled: browserAutomationEnabled,
+    risk_acknowledged: riskAcknowledged,
     disclosure_sha256: disclosureSha256,
     decided_at: decidedAt,
   };
@@ -99,20 +102,25 @@ function validStateShape(state) {
     && typeof state === 'object'
     && !Array.isArray(state)
     && state.schema_version === CONSENT_SCHEMA_VERSION
-    && typeof state.browser_automation_enabled === 'boolean'
+    && typeof state.risk_acknowledged === 'boolean'
+    && (state.risk_acknowledged
+      ? /^[a-f0-9]{64}$/.test(state.disclosure_sha256)
+      : state.disclosure_sha256 === null)
     && typeof state.decided_at === 'string'
     && !Number.isNaN(Date.parse(state.decided_at));
 }
 
 function statusResult(
   reason,
-  browserAutomationEnabled = null,
+  riskAcknowledged = null,
   status = 'NEEDS_AUTOMATION_CONSENT',
 ) {
   return {
     schema_version: CONSENT_SCHEMA_VERSION,
     status,
-    browser_automation_enabled: browserAutomationEnabled,
+    risk_acknowledged: riskAcknowledged,
+    decision_scope: 'risk_acknowledgement_only',
+    current_task_authorization_required: true,
     reason: reason ?? null,
   };
 }
@@ -155,7 +163,7 @@ function printResult(result, json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  console.log(`Codex bridge browser automation: ${result.status}`);
+  console.log(`Experimental browser risk acknowledgement: ${result.status}`);
   if (result.reason !== null) console.log(`Reason: ${result.reason}`);
 }
 
@@ -199,7 +207,7 @@ async function main() {
     return;
   }
   printResult(result, options.json);
-  process.exitCode = options.command === 'status' && result.status !== 'READY' ? 1 : 0;
+  process.exitCode = options.command === 'status' && result.status !== 'RISK_ACKNOWLEDGED' ? 1 : 0;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(currentFile)) {

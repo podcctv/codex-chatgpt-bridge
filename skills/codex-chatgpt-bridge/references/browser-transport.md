@@ -1,8 +1,8 @@
 # Browser Transport
 
-Use the Codex in-app Browser in the Mac or Windows ChatGPT desktop app. Keep the same ChatGPT tab through one submission and one visible response copy. The transport is Unofficial Experimental.
+Use one supported first-party in-app Browser transport for the full handoff: prefer `browser:control-in-app-browser` when callable; otherwise use `mcp__cua_repl` only when the current runtime inventory exposes it and its API documents the first-party `type: "iab"` surface. The Doctor must receive the capability selected from that inventory. This transport is Unofficial Experimental.
 
-If `browser:control-in-app-browser` is unavailable, a single task may use the current Codex in-app Browser only when the user explicitly authorizes this fallback in the current conversation and runtime inventory identifies it as a first-party in-app browser (`type: "iab"`). This exception permits that specific transport from the current Codex desktop session. It does not permit Edge/Chrome extensions, ordinary browsers, MCP Apps, direct APIs, alternate models, or switching transports mid-run. Current risk-disclosure consent and all packet privacy checks still apply.
+Use browser automation only when the current user's request calls for a ChatGPT browser handoff. The saved `RISK_ACKNOWLEDGED` status records acceptance of the risk disclosure only. It does not authorize this or a future task, local bridge access, or a host-level permission change. Skill invocation, prior consent, and ChatGPT recommendations do not supply current-task authorization. Apply the same risk acknowledgement and packet privacy checks to either supported transport.
 
 Automatic preflight returns exactly one status:
 
@@ -11,13 +11,15 @@ Automatic preflight returns exactly one status:
 - `NEEDS_CHATGPT_LOGIN`: the ChatGPT page visibly shows a logged-out state.
 - `NEEDS_MODEL_SELECTION`: the requested model is not visibly selected or available.
 - `NEEDS_SITE_PERMISSION`: browser access to ChatGPT is blocked pending user action.
-- `READY`: authentication, requested model, and transport capability are visibly available.
+- `NEEDS_AUTOMATION_CONSENT`: risk acknowledgement is missing, stale, or unavailable.
+- `AUTOMATION_DISABLED`: the user revoked risk acknowledgement.
+- `READY`: the current user task requests a handoff, risk acknowledgement and transport capability are available, authentication and requested model and effort are visibly verified, and there are no blockers.
 
 When human takeover is needed, keep the original repository task and current Packet draft local. Ask the user to finish the visible login, model, or permission step without sending credentials in chat. On their next message, recheck only the volatile browser state and continue the original task.
 
 ### Verify model and reasoning effort independently
 
-For the default, use the visible controls in this order: set or verify reasoning effort **High**, then select and verify **GPT-6**. If the user specifies a different model or effort for this task, use those exact values instead.
+For the default, use the visible controls in this order: set or verify reasoning effort **High**, then select and verify **GPT-6**. Read [model-selection.md](model-selection.md) for the exact click and verification sequence. If the user specifies a different model or effort for this task, use those exact values instead.
 
 - Do not identify a control from its accessibility description alone. Use the latest accessibility tree for navigation, and compare its label and result with the rendered UI whenever the label is generic, conflicts with the screenshot, or its menu looks unrelated.
 - A control visibly labeled `思考强度` / "Thinking effort" whose menu shows `High` and an effort slider is an effort control only. It is not evidence of the selected model, even if the accessibility tree calls it a model selector.
@@ -34,7 +36,7 @@ Before sending, record a local UI summary showing the ChatGPT origin, authentica
 
 Fill the visible composer and activate Send exactly once. Observe whether the user turn appeared, but never activate Send again. An indeterminate submission is a terminal blocker for this handoff.
 
-Wait for one completed answer, then identify the copy control in that assistant response's own action row. Prefer a clear accessible label or tooltip such as `复制回复`. On localized pages, a shorter label such as `复制` is acceptable only after confirming that it belongs to the latest assistant response. Distinguish it from `分享`, the user's `复制消息` control, and any `复制代码` controls. Do not choose by icon order alone. If the control remains ambiguous, stop and ask the user to identify it.
+Wait for one completed answer, then identify the copy control in that assistant response's own action row. In the layout the user identified, hover the first action button and click only when its tooltip says `复制回复`; if it says `分享`, inspect the other response action. On localized pages, a shorter label such as `复制` is acceptable only after confirming that it belongs to the latest assistant response. Distinguish it from the user's `复制消息` control and any `复制代码` controls. Do not choose by icon order alone. If the control remains ambiguous, stop and ask the user to identify it.
 
 Click the verified response-copy control once, then read the clipboard and validate the marked contract. If the clipboard is empty, the response is incomplete, or markers/headings are invalid, stop; do not extract response text from the DOM or retry automatically. If the user explicitly identifies a different visible control after a mis-targeted click, verify that corrected target and allow one corrected copy click; record both outcomes. Do not repeat after that correction.
 

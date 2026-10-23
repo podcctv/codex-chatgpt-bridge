@@ -238,18 +238,31 @@ while (`$true) { Start-Sleep -Seconds 1 }
   }
   $installedDoctor = Join-Path $installedSkill "scripts\skill-doctor.mjs"
   if (-not (Test-Path -LiteralPath $installedDoctor)) { throw "Installer omitted the static Skill Doctor." }
-  $installedDoctorOutput = & $nodePath $installedDoctor --json 2>&1
-  if ($LASTEXITCODE -ne 0) {
+  $isolatedConsentState = Join-Path $stateDir "missing-browser-risk-acknowledgement.json"
+  $installedDoctorOutput = & $nodePath $installedDoctor --json --browser-capability unavailable --consent-state-file $isolatedConsentState 2>&1
+  $installedDoctorExitCode = $LASTEXITCODE
+  if ($installedDoctorExitCode -notin @(0, 1)) {
     throw "Installed Skill Doctor failed:`n$($installedDoctorOutput -join [Environment]::NewLine)"
   }
   $installedDoctorReport = ($installedDoctorOutput -join [Environment]::NewLine) | ConvertFrom-Json
-  if ($installedDoctorReport.status -ne "READY") { throw "Installed Skill Doctor did not report READY." }
-  $compareDoctorOutput = & $nodePath $installedDoctor --compare-root $skillRoot --json 2>&1
-  if ($LASTEXITCODE -ne 0) {
+  if ($installedDoctorExitCode -ne 1 -or
+      $installedDoctorReport.status -ne "NEEDS_BROWSER" -or
+      $installedDoctorReport.installation_status -ne "READY" -or
+      $installedDoctorReport.browser_capability.status -ne "NEEDS_BROWSER" -or
+      $installedDoctorReport.browser_automation_consent.reason -ne "missing_state") {
+    throw "Installed Skill Doctor did not separate package readiness from the isolated browser gates."
+  }
+  $compareDoctorOutput = & $nodePath $installedDoctor --compare-root $skillRoot --browser-capability unavailable --consent-state-file $isolatedConsentState --json 2>&1
+  $compareDoctorExitCode = $LASTEXITCODE
+  if ($compareDoctorExitCode -notin @(0, 1)) {
     throw "Installed Skill Doctor could not compare against the source package:`n$($compareDoctorOutput -join [Environment]::NewLine)"
   }
   $compareDoctorReport = ($compareDoctorOutput -join [Environment]::NewLine) | ConvertFrom-Json
-  if ($compareDoctorReport.status -ne "READY" -or $compareDoctorReport.comparison.differences.Count -ne 0) {
+  if ($compareDoctorExitCode -ne 1 -or
+      $compareDoctorReport.status -ne "NEEDS_BROWSER" -or
+      $compareDoctorReport.installation_status -ne "READY" -or
+      $compareDoctorReport.browser_capability.status -ne "NEEDS_BROWSER" -or
+      $compareDoctorReport.comparison.differences.Count -ne 0) {
     throw "Installed skill does not match the repository's controlled files."
   }
   $markerPath = Join-Path $installedSkill "test-existing-install-marker.txt"
@@ -453,6 +466,9 @@ while (`$true) { Start-Sleep -Seconds 1 }
     initialDesiredState = $statusJson.desiredState.state
     credentialMode = $cfStatusJson.effectiveMode
     taskWhatIfInstalled = [bool]$taskStatusJson.installed
+    installedPackageReady = ($installedDoctorReport.installation_status -eq "READY")
+    browserRouteFailClosed = ($installedDoctorReport.status -eq "NEEDS_BROWSER")
+    installedCopyMatchesSource = ($compareDoctorReport.comparison.differences.Count -eq 0)
     rebootWhileOffExitCode = $reboot.ExitCode
     rebootWhileOffRejected = $true
   } | ConvertTo-Json -Depth 5

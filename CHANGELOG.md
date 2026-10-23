@@ -12,13 +12,17 @@ see the Security Model section in [README.md](README.md).
 
 - Unified the existing `codex-chatgpt-bridge` entrypoint with a consented, one-turn in-app Browser handoff for `L0_NO_TOOL` reasoning, including visible model checks, packet/result validation, and a redacted local completion receipt.
 - Added automation-consent state, a static Skill Doctor, and focused regression tests for the browser handoff contracts.
+- Added an explicit model-selection guide for setting High effort first, then opening the model menu from the displayed High control and selecting GPT-6.
 - Documented the separate authorization boundaries for direct browser handoffs and OAuth-gated DevSpace access.
 - Added a single-source browser automation disclosure and a Doctor field that reports browser consent separately from package readiness.
 
 ### Changed
 
 - Removed level-based auto-approval guidance for DevSpace tasks. `L1`–`L3` are policy labels, so local bridge use now requires explicit task-scoped user authorization and action-by-action scope checks.
-- Bound enabled browser consent to the SHA-256 digest of the exact disclosure text; editing the disclosure now invalidates prior enabled consent automatically, while a disabled decision remains disabled.
+- Changed browser automation state to schema 2 and bound risk acknowledgement to the SHA-256 digest of the exact disclosure. Old schema 1 state is not migrated.
+- Separated saved risk acknowledgement from task authorization: each handoff still needs a current user request that calls for ChatGPT Browser use. The stored decision does not authorize current or future tasks or change host approval settings.
+- Made the Doctor report installation, Browser capability, and risk acknowledgement separately, and fail closed for the browser route when any gate is missing.
+- Tightened the visible response-copy rule: hover the first response action and click only when its tooltip says `复制回复`; skip it when the tooltip says `分享`.
 - Clarified that browser consent is an agent workflow gate, not a host-level lock on browser capabilities.
 
 ## [0.3.0] - 2026-07-23

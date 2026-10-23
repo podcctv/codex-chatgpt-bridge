@@ -10,6 +10,11 @@ import { consentStatus, defaultConsentPath } from './automation-consent.mjs';
 const currentFile = fileURLToPath(import.meta.url);
 const defaultSkillRoot = dirname(dirname(currentFile));
 const minimumNodeMajor = 18;
+const browserTransports = new Map([
+  ['bundled-browser', 'browser:control-in-app-browser'],
+  ['cua-repl-iab', 'mcp__cua_repl (iab)'],
+]);
+const acceptedBrowserCapabilities = new Set([...browserTransports.keys(), 'unavailable']);
 
 const requiredFiles = [
   ['skill', 'SKILL.md'],
@@ -28,6 +33,7 @@ const requiredFiles = [
   ['examples', 'references/examples.md'],
   ['agents_snippet', 'references/agents-snippet.md'],
   ['browser_transport', 'references/browser-transport.md'],
+  ['model_selection', 'references/model-selection.md'],
   ['context_packet', 'references/context-packet.md'],
   ['reasoning_request', 'references/reasoning-request.md'],
   ['run_receipt', 'references/run-receipt.md'],
@@ -72,7 +78,10 @@ async function compareSkillRoots(skillRoot, compareRoot) {
 export async function inspectInstallation(
   skillRoot = defaultSkillRoot,
   compareRoot = undefined,
-  consentStateFile = defaultConsentPath(),
+  {
+    browserCapability = 'unknown',
+    consentStateFile = defaultConsentPath(),
+  } = {},
 ) {
   const normalizedRoot = resolve(skillRoot);
   const checks = await Promise.all(
@@ -116,31 +125,58 @@ export async function inspectInstallation(
     });
   }
 
-  const status = !runtimeReady
+  const installationStatus = !runtimeReady
     ? 'MISSING_RUNTIME'
     : checks.every((check) => check.ok)
       ? 'READY'
       : 'INVALID_INSTALLATION';
+  const transport = browserTransports.get(browserCapability) ?? null;
+  const browserCapabilityReport = {
+    status: transport ? 'READY' : 'NEEDS_BROWSER',
+    transport,
+    source: browserCapability === 'unknown' ? 'not provided' : 'runtime inventory argument',
+    recovery: transport ? [] : [
+      '`browser:control-in-app-browser` is supplied by the first-party bundled Browser plugin; it is not a standalone public Skill Installer package.',
+      'In ChatGPT desktop for macOS or Windows, update the app, enable/open its built-in Browser for Work or Codex, then start a fresh task so the capability is reloaded.',
+      'If this task runtime exposes the first-party `mcp__cua_repl` tool and its API supports `type: "iab"`, pass `--browser-capability cua-repl-iab`.',
+      'Do not substitute Chrome, Edge, an extension, a direct API, or another ordinary browser.',
+    ],
+  };
   const browserAutomationConsent = await consentStatus(
     consentStateFile,
     join(normalizedRoot, 'references', 'automation-disclosure.md'),
   );
+  const status = installationStatus !== 'READY'
+    ? installationStatus
+    : browserCapabilityReport.status !== 'READY'
+      ? browserCapabilityReport.status
+      : browserAutomationConsent.status !== 'RISK_ACKNOWLEDGED'
+        ? browserAutomationConsent.status
+        : 'READY';
 
   return {
-    schema_version: 1,
+    schema_version: 2,
     status,
+    installation_status: installationStatus,
     skill_name: skillName,
     platform: process.platform,
     node: process.versions.node,
     minimum_node_major: minimumNodeMajor,
     checks,
+    browser_capability: browserCapabilityReport,
     comparison,
     browser_automation_consent: browserAutomationConsent,
   };
 }
 
 function parseArgs(argv) {
-  const options = { json: false, skillRoot: defaultSkillRoot, compareRoot: undefined };
+  const options = {
+    json: false,
+    skillRoot: defaultSkillRoot,
+    compareRoot: undefined,
+    consentStateFile: defaultConsentPath(),
+    browserCapability: 'unknown',
+  };
   const seen = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -150,7 +186,7 @@ function parseArgs(argv) {
       options.json = true;
       continue;
     }
-    if (argument === '--skill-root' || argument === '--compare-root') {
+    if (['--skill-root', '--compare-root', '--browser-capability', '--consent-state-file'].includes(argument)) {
       if (seen.has(argument)) throw new Error(`duplicate argument: ${argument}`);
       if (!argv[index + 1] || argv[index + 1].startsWith('--')) {
         throw new Error(`missing value for ${argument}`);
@@ -167,6 +203,20 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (argument === '--consent-state-file') {
+      options.consentStateFile = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (argument === '--browser-capability') {
+      const value = argv[index + 1];
+      if (!acceptedBrowserCapabilities.has(value)) {
+        throw new Error(`invalid value for --browser-capability: ${value}`);
+      }
+      options.browserCapability = value;
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown or incomplete argument: ${argument}`);
   }
   return options;
@@ -177,23 +227,29 @@ async function main() {
   try {
     options = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`usage: skill-doctor.mjs [--json] [--skill-root <path>] [--compare-root <path>]\n${error.message}`);
+    console.error(`usage: skill-doctor.mjs [--json] [--skill-root <path>] [--compare-root <path>] [--consent-state-file <path>] [--browser-capability <bundled-browser|cua-repl-iab|unavailable>]\n${error.message}`);
     process.exitCode = 2;
     return;
   }
 
-  const result = await inspectInstallation(options.skillRoot, options.compareRoot);
+  const result = await inspectInstallation(options.skillRoot, options.compareRoot, {
+    browserCapability: options.browserCapability,
+    consentStateFile: options.consentStateFile,
+  });
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log(`Codex bridge package Doctor: ${result.status}`);
-    console.log(`Browser automation consent: ${result.browser_automation_consent.status}`);
+    console.log(`Codex bridge browser route Doctor: ${result.status}`);
+    console.log(`Installation: ${result.installation_status}`);
     for (const check of result.checks) {
       console.log(`${check.ok ? 'PASS' : 'FAIL'} ${check.id}: ${check.path}`);
       for (const difference of check.differences ?? []) {
         console.log(`  DIFF ${difference.path}${difference.error ? ` (${difference.error})` : ''}`);
       }
     }
+    console.log(`Browser capability: ${result.browser_capability.status} (${result.browser_capability.transport ?? result.browser_capability.source})`);
+    for (const instruction of result.browser_capability.recovery) console.log(`  ACTION ${instruction}`);
+    console.log(`Risk acknowledgement: ${result.browser_automation_consent.status} (scope: ${result.browser_automation_consent.decision_scope})`);
   }
   process.exitCode = result.status === 'READY' ? 0 : 1;
 }
