@@ -27,16 +27,17 @@ const doctorPath = join(skillRoot, 'scripts', 'skill-doctor.mjs');
 const consentPath = join(skillRoot, 'scripts', 'automation-consent.mjs');
 const validatorPath = join(skillRoot, 'scripts', 'validate-handoff.mjs');
 
-test('model selection guide drills through the High submenu and fails closed on availability limits', async () => {
+test('model selection drills through High and only explicit availability notices block', async () => {
   const selectionGuide = await readFile(join(skillRoot, 'references', 'model-selection.md'), 'utf8');
   const transportGuide = await readFile(join(skillRoot, 'references', 'browser-transport.md'), 'utf8');
   const doctorGuide = await readFile(join(skillRoot, 'references', 'skill-doctor.md'), 'utf8');
   assert.match(selectionGuide, /visible `High ›` label/);
   assert.match(selectionGuide, /GPT-6, Value: 1/);
-  assert.match(selectionGuide, /NEEDS_MODEL_AVAILABILITY/);
-  assert.match(selectionGuide, /Do not submit the packet, retry, work around the limit, or silently switch models/);
-  assert.match(transportGuide, /NEEDS_MODEL_AVAILABILITY/);
-  assert.match(doctorGuide, /NEEDS_MODEL_AVAILABILITY/);
+  assert.match(selectionGuide, /Only classify the model as `NEEDS_MODEL_AVAILABILITY` if the visible UI explicitly marks the selected row locked\/disabled or displays a usage-limit\/cooldown notice/);
+  assert.match(selectionGuide, /If no such notice is visible, treat it as no reported blocker and continue normally/);
+  assert.doesNotMatch(selectionGuide, /recheck selected model, effort, and usability/i);
+  assert.match(transportGuide, /Availability handling is notice-driven, not a separate inferred check/);
+  assert.match(doctorGuide, /if no such notice is visible, proceed through the normal handoff flow without a separate availability check/i);
 });
 
 test('default consent storage is scoped to the unified skill directory', () => {
