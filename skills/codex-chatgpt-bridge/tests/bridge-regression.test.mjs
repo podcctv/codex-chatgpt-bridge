@@ -27,19 +27,20 @@ const doctorPath = join(skillRoot, 'scripts', 'skill-doctor.mjs');
 const consentPath = join(skillRoot, 'scripts', 'automation-consent.mjs');
 const validatorPath = join(skillRoot, 'scripts', 'validate-handoff.mjs');
 
-test('model selection treats visible availability notices as warnings and still attempts one send', async () => {
+test('model selection checks only the requested model and effort, then follows the normal send result', async () => {
   const selectionGuide = await readFile(join(skillRoot, 'references', 'model-selection.md'), 'utf8');
   const transportGuide = await readFile(join(skillRoot, 'references', 'browser-transport.md'), 'utf8');
   const doctorGuide = await readFile(join(skillRoot, 'references', 'skill-doctor.md'), 'utf8');
+  const skillGuide = await readFile(join(skillRoot, 'SKILL.md'), 'utf8');
   assert.match(selectionGuide, /visible `High ›` label/);
   assert.match(selectionGuide, /GPT-6, Value: 1/);
-  assert.match(selectionGuide, /visible model lock or usage-limit notice is informational/i);
-  assert.match(selectionGuide, /Make one normal Send attempt/);
-  assert.match(selectionGuide, /never switch models, retry, or work around the limit/i);
-  assert.doesNotMatch(selectionGuide, /recheck selected model, effort, and usability/i);
-  assert.match(transportGuide, /not a preflight status or stop condition/i);
-  assert.doesNotMatch(transportGuide, /NEEDS_MODEL_AVAILABILITY/);
-  assert.match(doctorGuide, /does not prevent `READY`/i);
+  assert.match(selectionGuide, /recheck the selected model and effort/i);
+  assert.match(transportGuide, /activate Send exactly once/);
+  assert.match(transportGuide, /If Send is disabled, report that the page prevented submission/i);
+  assert.match(transportGuide, /ChatGPT rejection is terminal/);
+  for (const guide of [selectionGuide, transportGuide, doctorGuide, skillGuide]) {
+    assert.doesNotMatch(guide, /visible model lock|usage-limit notice|usage limit.{0,20}notice|availability notice|availability check/i);
+  }
 });
 
 test('default consent storage is scoped to the unified skill directory', () => {
