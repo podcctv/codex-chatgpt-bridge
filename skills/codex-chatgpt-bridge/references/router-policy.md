@@ -1,15 +1,10 @@
----
-name: codex-chatgpt-bridge
-description: Use when Codex must decide whether to execute locally, use subagents, or hand off reasoning, review, visual analysis, or scoped local bridge inspection to ChatGPT through Chrome; especially for large-context reviews, hardware go/no-go, paper/code critique, complex bugs, and local bridge permission boundaries.
----
-
 # Codex ChatGPT Bridge
 
 ## Overview
 
-Use this skill as the routing policy for Codex, ChatGPT, local bridge, and Chrome.
+Use this reference as the routing policy for Codex, ChatGPT, and the scoped local bridge.
 
-Core principle: **Codex is the execution owner. ChatGPT is the reasoning and review partner. local bridge is a scoped local access bridge. Chrome is the message transport.**
+Core principle: **Codex owns execution. ChatGPT is the reasoning and review partner. The local bridge is a scoped access path. Direct Browser handoffs use the first-party in-app Browser only.**
 
 Default posture:
 - Codex owns writes, tests, builds, git, verification, and final reporting.
@@ -119,7 +114,7 @@ Select one transport for a handoff and keep its access boundary for the entire t
 | Direct browser | One bounded reasoning or planning question can be answered from a compact packet | `L0_NO_TOOL`; no repository access, browsing, or tools | Current explicit automation consent, visible account/model preflight, one submit and one verified response copy, packet/result validation, local receipt |
 | DevSpace local bridge | ChatGPT must inspect files or run an explicitly scoped diagnostic | OAuth-authorized app plus narrow `allowedRoots`; policy level `L1`–`L5` | Bridge Doctor, lowest sufficient permission, approved root, controller lifecycle, local review of every recommendation |
 
-The browser route is experimental and uses the in-app Browser only. Follow the consent, supported-surface, High-then-GPT-6 default, one-submit/one-copy, blocker, and receipt procedures in the main skill references. Browser consent authorizes only that experimental automation; it grants no DevSpace access. DevSpace OAuth and permission approval grant no browser consent. Do not switch transports mid-handoff; start a new packet and re-evaluate access if the task needs a different route.
+The browser route is experimental and uses the in-app Browser only. Follow the consent, supported-surface, High-then-GPT-6 default, one-submit/one-copy, blocker, and receipt procedures in the main skill references. Saved Browser-risk acknowledgement records acceptance of the risk disclosure only; the current user's request must separately call for the handoff. Neither gate grants DevSpace access. DevSpace OAuth and permission approval grant no Browser-risk acknowledgement or task authorization. Do not switch transports mid-handoff; start a new packet and re-evaluate access if the task needs a different route.
 
 ## Permission Levels
 
@@ -165,7 +160,7 @@ Consequences:
 2. Classify the task before reading large context.
 3. If the task is a small deterministic edit, use `ROUTE_CODEX_EXECUTE` in `NORMAL`; in `TOKEN_SAVING`, still let Codex execute but avoid broad local orientation.
 4. If the task has independent review axes, use `ROUTE_CODEX_SUBAGENTS` in `NORMAL`; in `TOKEN_SAVING`, prefer one ChatGPT review if broad synthesis is cheaper than many subagents.
-5. If the task needs deep synthesis, high-cost judgment, or the user asks for ChatGPT/Pro/high-intelligence review, use `ROUTE_CHATGPT_REASONING`.
+5. If the task needs deep synthesis, high-cost judgment, or high-depth ChatGPT review, use `ROUTE_CHATGPT_REASONING`.
 6. If Codex would need to read more than about five large files, long logs, PDFs, screenshots, or broad project context, prefer `ROUTE_CHATGPT_LOCAL_READ` or `ROUTE_CHATGPT_VISION`.
 7. If any requested action crosses L3-L5 boundaries, route to `ROUTE_HUMAN_APPROVAL`.
 8. After ChatGPT responds, Codex reads only implementation-relevant files, applies accepted changes, verifies, and reports evidence.
@@ -356,7 +351,7 @@ When sending ChatGPT a local bridge task, prevent tool-call loops:
 `TOKEN_SAVING` and `CHATGPT_ARCHITECT` only pay off if the split respects what each surface is cheap at. "Efficient" and "token-saving" pull opposite ways for execution work, so route by marginal cost, not by habit.
 
 The cost asymmetry:
-- A ChatGPT bridge tool call is slow and brittle (Chrome -> tunnel -> Worker -> devspace round-trip, ~300s shell cap, can stall) but spends little Codex quota.
+- A ChatGPT bridge tool call is slow and brittle (ChatGPT -> tunnel -> Worker -> DevSpace round-trip, ~300s shell cap, can stall) but spends little Codex quota.
 - A Codex local op is fast and reliable but spends Codex quota.
 
 One-line heuristic: route a unit of work to ChatGPT only when the Codex tokens it would otherwise cost greatly exceed one bridge round-trip plus its reliability risk. Otherwise keep it in Codex.

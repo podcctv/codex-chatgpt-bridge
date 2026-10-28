@@ -5,7 +5,7 @@ Use this only when a project explicitly wants to adopt the router policy locally
 ```markdown
 ## Codex, ChatGPT, and local bridge Routing
 
-Use the user-level `codex-chatgpt-bridge` skill when a task may benefit from routing between Codex local execution, ChatGPT reasoning/review, local bridge scoped project inspection, or Chrome-based ChatGPT handoff.
+Use the user-level `codex-chatgpt-bridge` skill when a task may benefit from routing between Codex local execution, ChatGPT reasoning/review, local bridge scoped project inspection, or a first-party in-app Browser handoff.
 
 Default division of labor:
 - Codex owns source edits, tests, builds, git operations, verification, and final execution.

@@ -1,5 +1,7 @@
 # Static Skill Doctor
 
+For the distinction between native desktop control and first-party Browser capability, see [computer-use.md](computer-use.md). A working native Windows Computer Use interface never substitutes for a live `type: "iab"` Browser surface.
+
 Run the static package check before opening ChatGPT or changing local bridge access. For a browser handoff, first inspect the current runtime tool inventory, then pass the exact supported transport:
 
 ```bash

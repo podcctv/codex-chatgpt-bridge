@@ -33,6 +33,7 @@ const requiredFiles = [
   ['examples', 'references/examples.md'],
   ['agents_snippet', 'references/agents-snippet.md'],
   ['browser_transport', 'references/browser-transport.md'],
+  ['computer_use', 'references/computer-use.md'],
   ['model_selection', 'references/model-selection.md'],
   ['context_packet', 'references/context-packet.md'],
   ['reasoning_request', 'references/reasoning-request.md'],
@@ -139,6 +140,7 @@ export async function inspectInstallation(
       '`browser:control-in-app-browser` is supplied by the first-party bundled Browser plugin; it is not a standalone public Skill Installer package.',
       'In ChatGPT desktop for macOS or Windows, update the app, enable/open its built-in Browser for Work or Codex, then start a fresh task so the capability is reloaded.',
       'If this task runtime exposes the first-party `mcp__cua_repl` tool and its API supports `type: "iab"`, pass `--browser-capability cua-repl-iab`.',
+      'Native Windows control through the `computer-use` Skill or `@oai/sky` is not an in-app Browser capability; see `references/computer-use.md`.',
       'Do not substitute Chrome, Edge, an extension, a direct API, or another ordinary browser.',
     ],
   };

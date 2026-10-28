@@ -1,8 +1,3 @@
----
-name: codex-chatgpt-bridge
-description: Use when the user wants Codex to coordinate Chrome ChatGPT, ChatGPT Apps or connectors, local MCP, Cloudflare or other tunnels, local project access, service start/stop/status switches, or task routing between ChatGPT Pro/high-intelligence reasoning and Codex local execution.
----
-
 # Codex ChatGPT Bridge
 
 ## Overview
@@ -10,7 +5,7 @@ description: Use when the user wants Codex to coordinate Chrome ChatGPT, ChatGPT
 Coordinate three surfaces without confusing their authority:
 
 - **Codex** is the local executor: inspect files, edit safely, run tests, manage processes, and verify artifacts.
-- **Chrome ChatGPT** is the high-level reasoning partner: use it for broad synthesis, Pro/high-intelligence thinking, or user-visible ChatGPT workflows.
+- **ChatGPT in the first-party in-app Browser** is the supported transport for bounded reasoning handoffs. Use the local bridge separately when ChatGPT needs scoped project access.
 - **local MCP** is the bridge: expose one approved local project root to ChatGPT through a temporary or managed HTTPS tunnel.
 
 Default posture: keep the bridge off unless the user asks to use it, expose only the intended project root, and treat ChatGPT-side actions as another agent whose output needs verification.
@@ -145,11 +140,11 @@ Use this table before sending work through the bridge.
 | Task shape | Primary surface | Why |
 |---|---|---|
 | Local edits, tests, git, process control, secrets, irreversible actions | Codex | Stronger local tool control and verification |
-| Broad strategy, product/research synthesis, second-opinion reasoning, "think harder" questions | ChatGPT Pro/high-intelligence | Better use of ChatGPT-side reasoning budget |
+| Broad strategy, product/research synthesis, second-opinion reasoning, "think harder" questions | ChatGPT high-depth reasoning | Better use of ChatGPT-side reasoning budget |
 | Read-only project orientation by ChatGPT | ChatGPT via local bridge | Useful when ChatGPT needs source context directly |
 | Cross-agent critique or plan review | ChatGPT drafts, Codex verifies | Avoid blind trust in either side |
 | Long execution with many shell/file operations | Codex, optionally with ChatGPT checkpoints | Saves ChatGPT tokens and keeps artifacts local |
-| User-visible ChatGPT UI configuration | Codex via Chrome plugin | Needs logged-in browser state |
+| User-visible ChatGPT UI configuration | Codex via first-party in-app Browser | Needs logged-in Browser state |
 
 Do not route sensitive files, credentials, private keys, or broad home-directory access through the local bridge. Narrow `allowedRoots` before starting.
 
@@ -158,8 +153,8 @@ Do not route sensitive files, credentials, private keys, or broad home-directory
 Use a split-brain loop:
 
 1. **Frame**: Codex summarizes the task, local constraints, and allowed root.
-2. **Delegate reasoning**: Send ChatGPT a compact question or artifact-backed summary when Pro/high-intelligence reasoning is useful.
-3. **Receive**: Extract ChatGPT's answer through Chrome. Treat it as advice, not ground truth.
+2. **Delegate reasoning**: Send ChatGPT a compact question or artifact-backed summary when high-depth reasoning is useful.
+3. **Receive**: For a one-shot Browser handoff, use the verified response action and selected Browser's documented clipboard path. For local bridge work, request the structured Action Manifest. Treat both as advice, not ground truth.
 4. **Execute**: Codex performs local edits/tests/commands.
 5. **Verify**: Codex checks files, logs, tests, and browser-visible outcomes.
 6. **Reconcile**: If ChatGPT's recommendation conflicts with local evidence, local evidence wins; ask ChatGPT only for revised reasoning or alternatives.
@@ -203,7 +198,7 @@ Hardening checklist, by leverage:
 | Suspected someone else connected | Run `Rotate` to revoke all tokens and re-key, then re-authorize |
 | Exposing the wrong root | Use `Off`, review and update the controller profile, then use `On`; reauthorize only if needed |
 | Letting ChatGPT directly edit without review | Require Codex verification before final claims |
-| Treating ChatGPT Pro output as proven | Ask for evidence, then validate locally |
+| Treating a ChatGPT recommendation as proven | Ask for evidence, then validate locally |
 | Reusing an old Quick Tunnel URL | Run `Status`; restart if the process or URL is stale |
 | Printing Owner password into chat | Fill it only through browser automation after user confirmation |
 
